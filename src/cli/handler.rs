@@ -110,6 +110,22 @@ impl CommandHandler {
                 let cleaner = CleanCommand::new(self.working_directory.clone());
                 cleaner.execute(options)
             }
+            Commands::Show {
+                service,
+                modules,
+                dependencies,
+                verbose,
+            } => {
+                let options = ShowOptions {
+                    service,
+                    modules,
+                    dependencies,
+                    verbose,
+                };
+
+                let shower = ShowCommand::new(self.working_directory.clone());
+                shower.execute(options)
+            }
         }
     }
 

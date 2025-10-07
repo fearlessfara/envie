@@ -6,6 +6,7 @@ pub mod init;
 pub mod list;
 pub mod output;
 pub mod clean;
+pub mod show;
 
 pub use deploy::*;
 pub use destroy::*;
@@ -15,3 +16,4 @@ pub use init::*;
 pub use list::*;
 pub use output::*;
 pub use clean::*;
+pub use show::*;

@@ -112,6 +112,24 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Show detailed information about services, modules, and dependencies
+    Show {
+        /// The name of the service to show (optional - shows all if not provided)
+        #[arg(long)]
+        service: Option<String>,
+        
+        /// Show only module information
+        #[arg(long)]
+        modules: bool,
+        
+        /// Show only dependency information
+        #[arg(long)]
+        dependencies: bool,
+        
+        /// Print detailed output during execution
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
