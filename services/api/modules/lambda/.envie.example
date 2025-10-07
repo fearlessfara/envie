@@ -1,0 +1,29 @@
+# Lambda Module Configuration
+# This file can override or extend the module configuration
+
+name: lambda
+description: Lambda function for API
+
+# Module-specific variables
+variables:
+  runtime: nodejs18.x
+  timeout: 30
+  memory: 512
+  environment: dev
+
+# Cross-environment remote state references specific to this module
+remote_states:
+  - name: database
+    source: ../../../database/modules/dynamodb
+    environment: stable.sandbox  # Use sandbox database
+    outputs: [table_name, table_arn]
+  
+  - name: vpc
+    source: ../../../networking/modules/vpc
+    environment: ephemeral  # Use current MR VPC
+    outputs: [vpc_id, private_subnets]
+  
+  - name: auth
+    source: ../../../auth/modules/cognito
+    environment: ephemeral.456  # Use specific MR auth
+    outputs: [user_pool_id, user_pool_client_id]

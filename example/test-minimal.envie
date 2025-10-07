@@ -1,0 +1,30 @@
+# Minimal test configuration
+version: "1.0"
+
+project:
+  name: test-app
+  description: Minimal test project
+
+environments:
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    backend:
+      type: s3
+      config:
+        bucket: "terraform-state-ephemeral"
+        region: "eu-west-1"
+        key_pattern: "ephemeral/{workspace}/{service}/{module}/terraform.tfstate"
+  
+  stable:
+    sandbox:
+      workspace: "sandbox"
+      backend:
+        type: s3
+        config:
+          bucket: "terraform-state-stable"
+          region: "eu-west-1"
+          key_pattern: "stable/{environment}/{service}/{module}/terraform.tfstate"
+      description: "Sandbox environment"
+
+services:
+  - path: services/api

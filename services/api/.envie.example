@@ -1,0 +1,40 @@
+# API Service Configuration
+# This file defines the API service and its modules with cross-environment references
+
+name: api
+description: API Gateway and Lambda functions
+
+modules:
+  - name: lambda
+    path: modules/lambda
+    depends: []
+    # Module-specific variables
+    variables:
+      runtime: nodejs18.x
+      timeout: 30
+      memory: 512
+    # Cross-environment remote state references
+    remote_states:
+      - name: database
+        source: ../../database/modules/dynamodb
+        environment: stable.sandbox  # Use sandbox database
+        outputs: [table_name, table_arn, table_stream_arn]
+      
+      - name: vpc
+        source: ../../networking/modules/vpc
+        environment: ephemeral  # Use current MR VPC
+        outputs: [vpc_id, private_subnets, security_group_id]
+
+  - name: gateway
+    path: modules/gateway
+    depends: [lambda]  # Must deploy lambda first
+    remote_states:
+      - name: lambda
+        source: ./lambda  # Reference local lambda module
+        environment: ephemeral  # Use current MR lambda
+        outputs: [function_name, function_arn, function_invoke_arn]
+
+# Service-level dependencies
+depends:
+  - ../database
+  - ../networking

@@ -1,0 +1,24 @@
+# Networking Service Configuration
+# This is the foundation layer - no dependencies
+
+name: networking
+description: VPC and networking infrastructure
+
+modules:
+  - name: vpc
+    path: modules/vpc
+    depends: []
+
+  - name: subnets
+    path: modules/subnets
+    depends:
+      - path: ./vpc
+        environment: ephemeral
+
+  - name: security-groups
+    path: modules/security-groups
+    depends:
+      - path: ./vpc
+        environment: ephemeral
+
+# No dependencies - this is the foundation layer

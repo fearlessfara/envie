@@ -1,0 +1,32 @@
+# Database Service Configuration
+
+name: database
+description: Database layer with DynamoDB and RDS
+
+modules:
+  - name: dynamodb
+    path: modules/dynamodb
+    depends: []
+    variables:
+      table_name: api-table
+      billing_mode: PAY_PER_REQUEST
+    remote_states:
+      - name: networking
+        source: ../networking/modules/vpc
+        workspace: dev
+        outputs: [vpc_id, private_subnets]
+
+  - name: rds
+    path: modules/rds
+    depends: [dynamodb]
+    variables:
+      instance_class: db.t3.micro
+      allocated_storage: 20
+    remote_states:
+      - name: networking
+        source: ../networking/modules/vpc
+        workspace: dev
+        outputs: [vpc_id, private_subnets, security_group_id]
+
+depends:
+  - ../networking

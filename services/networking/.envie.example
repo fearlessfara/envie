@@ -1,0 +1,30 @@
+# Networking Service Configuration
+
+name: networking
+description: VPC and networking infrastructure
+
+modules:
+  - name: vpc
+    path: modules/vpc
+    depends: []
+    variables:
+      cidr_block: 10.0.0.0/16
+      availability_zones: ["eu-west-1a", "eu-west-1b"]
+
+  - name: subnets
+    path: modules/subnets
+    depends: [vpc]
+    remote_states:
+      - name: vpc
+        source: ./vpc
+        outputs: [vpc_id, cidr_block]
+
+  - name: security-groups
+    path: modules/security-groups
+    depends: [vpc]
+    remote_states:
+      - name: vpc
+        source: ./vpc
+        outputs: [vpc_id]
+
+# No dependencies - this is the foundation layer

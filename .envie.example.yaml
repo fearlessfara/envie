@@ -1,0 +1,69 @@
+# Envie Configuration - Advanced Example
+# This file is orchestration metadata only - your Terraform code remains completely standard
+# Think of it like pnpm-workspace.yaml for your Terraform monorepo
+
+version: "1.0"
+
+project:
+  name: my-project
+  description: Example project with multiple services and modules
+
+services:
+  # API Service
+  - name: api
+    description: Main API service
+    path: services/api
+    modules:
+      - name: lambda
+        path: modules/lambda
+        depends: []
+      - name: api-gateway
+        path: modules/api-gateway
+        depends: [lambda]  # API Gateway needs Lambda to exist first
+      - name: cognito
+        path: modules/cognito
+        depends: []
+    depends: [database, storage]  # API needs both database and storage services
+
+  # Database Service
+  - name: database
+    description: Database layer
+    path: services/database
+    modules:
+      - name: dynamodb
+        path: modules/dynamodb
+        depends: []
+      - name: rds
+        path: modules/rds
+        depends: []
+    depends: [networking]  # Database needs VPC/networking
+
+  # Storage Service
+  - name: storage
+    description: Storage service
+    path: services/storage
+    modules:
+      - name: s3
+        path: modules/s3
+        depends: []
+      - name: cloudfront
+        path: modules/cloudfront
+        depends: [s3]  # CloudFront needs S3 bucket to exist
+    depends: []
+
+  # Networking Service - Foundation layer
+  - name: networking
+    description: Base networking infrastructure
+    path: services/networking
+    modules:
+      - name: vpc
+        path: modules/vpc
+        depends: []
+      - name: subnets
+        path: modules/subnets
+        depends: [vpc]
+      - name: security-groups
+        path: modules/security-groups
+        depends: [vpc]
+    depends: []  # No dependencies - this is the foundation
+

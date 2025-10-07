@@ -1,0 +1,314 @@
+#!/bin/bash
+
+# Color codes
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+RESET="\033[0m"
+
+# Function to handle script output messages, respecting the SUPPRESS_ECHO flag
+#
+# This function is responsible for printing messages to the console, but it respects the SUPPRESS_ECHO flag.
+# If the SUPPRESS_ECHO flag is not set, the function will print the provided message(s) to the console using the `echo` command.
+#
+# Parameters:
+#   - $@: The message(s) to be printed to the console.
+#
+# Example usage:
+#   print_msg "Hello, world!"
+#   # Output: Hello, world!
+#
+#   SUPPRESS_ECHO=1
+#   print_msg "This message will not be printed."
+#   # Output: (no output)
+print_msg() {
+  if [[ -z "$SUPPRESS_ECHO" ]]; then
+    echo -e "$@"
+  fi
+}
+
+# Helper function for running terraform commands
+#
+# This function is used to execute Terraform commands with optional arguments.
+# It takes three parameters:
+#   - command: The Terraform command to be executed.
+#   - workspace: The Terraform workspace to use.
+#   - quiet: An optional argument to suppress command output.
+#
+# The function constructs the command arguments based on the provided parameters.
+# If the command is "apply", it automatically adds the "-auto-approve" flag.
+# If the quiet parameter is set to "--quiet", it redirects the command output to /dev/null.
+# Finally, it executes the Terraform command using the constructed arguments.
+#
+# Example usage:
+#   terraform_command "apply" "dev" "--quiet"
+#
+# This will execute the "terraform apply" command in the "dev" workspace,
+# suppressing the command output.
+terraform_command() {
+  # check if the first argument is a quite flag, set a quite variable to true and shift the args
+  local quiet_flag
+  local output_file=""
+  if [[ "$1" == "--quiet" ]]; then
+    quiet_flag="true"
+  fi
+
+  shift
+
+  if [[ "$1" == "--output" ]]; then
+    shift
+    output_file="$1"
+    shift
+  fi
+
+  local command=$1
+  local args=${@}
+
+  [[ "$command" == "apply" || "$command" == "destroy" ]] && args+=("-auto-approve")
+
+  local error_msg="${RED}Error: terraform command failed with args${RESET} ${args[@]}"
+
+
+  if [[ -n "$output_file" ]]; then
+    local stderr_file=$(mktemp)
+    GODEBUG=asyncpreemptoff=1 terraform ${args[@]} >"$output_file" 2>"$stderr_file" || { 
+      print_msg $error_msg
+      cat "$stderr_file" >&2
+      cat "$stderr_file" >>"$output_file"
+      rm "$stderr_file"
+      exit 1
+    }
+    rm "$stderr_file"
+  elif [[ "$quiet_flag" == "true" ]]; then
+      GODEBUG=asyncpreemptoff=1 terraform ${args[@]} >/dev/null || { print_msg $error_msg; exit 1; }
+  else
+    GODEBUG=asyncpreemptoff=1 terraform ${args[@]} || { print_msg $error_msg; exit 1; }
+  fi
+}
+
+# Function to get the repository name based on git origin URL
+#
+# This function retrieves the repository name by extracting it from the git origin URL.
+# It uses the `git config` command to get the remote.origin.url and then extracts the
+# repository name by removing the ".git" extension from the URL.
+#
+# Example usage:
+#   repo_name=$(get_repo_name)
+#
+# Arguments: None
+# Returns:
+#   The repository name as a string.
+get_repo_name() {
+  local git_origin_url=$(git config --get remote.origin.url)
+  local repo_name=$(basename "$git_origin_url" .git)
+  echo "$repo_name"
+}
+
+# Function to validate the format of a merge request ID
+#
+# Arguments:
+#   - merge_request_id: The merge request ID to validate
+#
+# Returns:
+#   - 0 if the merge request ID is in the correct format
+#   - 1 if the merge request ID is in an invalid format
+validate_workspace_name() {
+  local merge_request_id=$1
+
+  # Check if the merge request ID is in the correct format
+  if [[ ! $merge_request_id =~ ^[0-9]+(-[0-9A-Za-z]+)?$ ]]; then
+    print_msg "${RED}Error: Invalid merge request ID. Please provide a valid merge request ID in the format {number}-({number})?.${RESET}"
+    return 1  # Return with an error code to indicate failure
+  fi
+}
+
+# Function to format the workspace name based on the merge request ID
+# Arguments:
+#   - merge_request_id: The ID of the merge request
+# Returns:
+#   None
+format_workspace_name() {
+  local merge_request_id=$1
+
+  local repo_name=$(get_repo_name)
+  print_msg "${repo_name}-${merge_request_id}" # Output the formatted workspace name
+}
+
+# Function to start the deployment of a development environment
+# Arguments:
+#   - merge_request_id: The ID of the merge request
+#   - quiet_flag: Optional flag to suppress output
+start() {
+  local merge_request_id="$1"
+  local quiet_flag="$2"
+
+  # validate the merge request ID
+  validate_workspace_name "$merge_request_id" || { exit 1; }
+
+  # format the workspace name
+  local workspace_name=$(format_workspace_name "$merge_request_id")
+
+  # Initialize Terraform
+  terraform_command "$quiet_flag" init
+
+  # Check if the workspace already exists
+  if terraform workspace list | grep -qE "\\b${workspace_name}\\b"; then
+    print_msg "${GREEN}Activating development environment: $workspace_name${RESET}."
+    terraform_command "$quiet_flag" workspace select "$workspace_name"
+  else
+    print_msg "${YELLOW}Creating new development environment: ${workspace_name}${RESET}"
+    terraform_command "$quiet_flag" workspace new "$workspace_name"
+  fi
+
+  # Deploy the development environment
+  print_msg "${GREEN}Deploying development environment: ${workspace_name}${RESET}"
+  terraform_command "$quiet_flag" --output "${workspace_name}.arya" apply
+
+  print_msg "${GREEN}Development environment $workspace_name is ready to use${RESET}"
+}
+
+# Function to destroy the current active development environment
+#
+# This function is used to destroy the current active development environment.
+# It takes two optional parameters: merge_request_id and quiet_flag.
+# - merge_request_id: The ID of the merge request associated with the development environment.
+#   If provided, the function will validate and format the workspace name based on the merge request ID.
+#   If not provided, the function will use the current Terraform workspace name.
+# - quiet_flag: A flag to control the verbosity of the destroy process. If set to "quiet", the destroy process will be silent.
+#
+# If the merge_request_id is provided and it fails validation, the function will return an error.
+# If the workspace name is "default", indicating that there is no active development environment, the function will exit with an error.
+#
+# The function will then proceed to destroy the development environment by executing the following steps:
+# 1. Print a message indicating the start of the destroy process.
+# 2. Call the "terraform_command" function to execute the "destroy" command on the specified workspace name.
+# 3. Select the default Terraform workspace.
+# 4. Delete the specified workspace.
+# 5. Print a message indicating the successful destruction of the development environment.
+#
+# If any of the Terraform commands fail, the function will exit with an error.
+#
+# Example usage:
+# destroy 1234-5678 --quiet
+# destroy
+destroy() {
+  local merge_request_id="$1"
+  local quiet_flag="$2"
+  local workspace_name=""
+
+  # check if merge_request_id is provided and not equal to --quiet
+  if [[ -n "$merge_request_id" && "$merge_request_id" != "--quiet" ]]; then
+    # validate the merge request ID
+    validate_workspace_name "$merge_request_id" || { exit 1; }
+
+    # format the workspace name
+    workspace_name=$(format_workspace_name "$merge_request_id")
+  else
+    workspace_name=$(terraform workspace show)
+    quiet_flag="$merge_request_id"
+  fi
+
+  if [[ "$workspace_name" == "default" ]]; then
+    print_msg "${RED}Error: No active development environment to destroy.${RESET}"
+    exit 1
+  fi
+
+  # check if workspace exists
+  if ! terraform workspace list | grep -qE "\\b${workspace_name}\\b"; then
+    print_msg "${RED}Error: Development environment $workspace_name does not exist.${RESET}"
+    exit 1
+  fi
+
+  print_msg "${GREEN}Destroying development environment: $workspace_name${RESET}"
+  terraform_command "$quiet_flag" workspace select "$workspace_name"
+  terraform_command "$quiet_flag" destroy
+  terraform_command "$quiet_flag" workspace select default
+  terraform_command "$quiet_flag" workspace delete "$workspace_name"
+
+  print_msg "${GREEN}Development environment $workspace_name has been destroyed${RESET}"
+}
+
+# Function to list all available development environments
+#
+# This function lists all the available development environments by executing the `terraform workspace list` command.
+# It filters out the default workspace and displays the remaining workspaces.
+# If no development environments are available, it prints a message indicating that there are no environments.
+# The function also removes the repository name prefix from the workspace names before displaying them.
+#
+# Example usage:
+#   list
+#
+# Output:
+#   Available development environments:
+#   dev
+#   staging
+#   production
+list() {
+  local workspaces=$(terraform workspace list | grep -v 'default')
+  if [[ -z "$workspaces" ]]; then
+    print_msg "${YELLOW}No development environments available.${RESET}"
+    exit 0
+  fi
+
+  local repo_name=$(get_repo_name)
+  workspaces=$(echo "$workspaces" | sed "s/$repo_name-//g")
+  print_msg "${GREEN}Available development environments:${RESET}\n$workspaces"
+}
+
+# Function to display the current active development environment
+#
+# This function retrieves the name of the current Terraform workspace and displays it as the active development environment.
+# If the current workspace is the default workspace, it will display a message indicating that there is no active development environment.
+# The function also removes the repository name prefix from the workspace name before displaying it.
+#
+# Example usage:
+# current
+#
+# Output:
+# Current development environment: my-environment
+current() {
+  local workspace_name=$(terraform workspace show)
+  if [[ "$workspace_name" == "default" ]]; then
+    print_msg "${YELLOW}No active development environment.${RESET}"
+    exit 0
+  fi
+
+  local repo_name=$(get_repo_name)
+  workspace_name=$(echo "$workspace_name" | sed "s/$repo_name-//g")
+  print_msg "${GREEN}Current development environment: $workspace_name.${RESET}"
+}
+
+# Display help information
+help() {
+  print_msg "${YELLOW}Usage: braavos <command> [options]${RESET}"
+  print_msg "${GREEN}  start {merge_request_id} [--quiet]     - Start a new ephemeral dev environment based on the provided merge request ID.${RESET}"
+  print_msg "${GREEN}  destroy [{merge_request_id}] [--quiet] - Destroy the specified or current active development environment. Optional merge request ID can be provided to target a specific environment.${RESET}"
+  print_msg "${GREEN}  list                                   - List all available development environments.${RESET}"
+  print_msg "${GREEN}  current                                - Display the current active development environment.${RESET}"
+  print_msg "${GREEN}  help                                   - Display this help information.${RESET}"
+  print_msg "${YELLOW}Options for start/destroy commands:${RESET}"
+  print_msg "${GREEN}  --quiet                                - Run commands silently without displaying output.${RESET}"
+  print_msg "${YELLOW}Examples:${RESET}"
+  print_msg "${GREEN}  ./braavos start 1234                   - Start a new ephemeral dev environment for merge request ID 1234.${RESET}"
+  print_msg "${GREEN}  ./braavos destroy 1234                 - Destroy the development environment associated with merge request ID 1234.${RESET}"
+  print_msg "${GREEN}  ./braavos destroy                      - Destroy the current active development environment.${RESET}"
+  print_msg "${GREEN}  ./braavos list                         - List all available development environments.${RESET}"
+  print_msg "${GREEN}  ./braavos current                      - Display the current active development environment.${RESET}"
+  print_msg "${GREEN}  ./braavos help                         - Display help information on how to use these commands.${RESET}"
+}
+
+# Main script logic
+# This script handles different commands passed as arguments and executes the corresponding functions.
+# It uses a case statement to check the value of the first argument and then calls the corresponding function.
+# If the first argument is not one of the expected commands, it displays an error message and exits with a non-zero status code.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "$1" in
+    start|destroy|list|current|help)
+      "$1" "${@:2}"
+      ;;
+    *)
+      print_msg "${RED}Error: Invalid command. Use 'start', 'destroy', 'list', 'current', or 'help'.${RESET}"
+      exit 1
+      ;;
+  esac
+fi

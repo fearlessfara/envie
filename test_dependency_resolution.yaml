@@ -1,0 +1,41 @@
+version: "1.0"
+
+services:
+  # Frontend depends on API
+  - name: frontend
+    modules:
+      - name: cdn
+        depends: []
+    depends: [api]
+
+  # API depends on database and cache
+  - name: api
+    modules:
+      - name: lambda
+        depends: []
+      - name: gateway
+        depends: [lambda]
+    depends: [database, cache]
+
+  # Database depends on networking
+  - name: database
+    modules:
+      - name: dynamodb
+        depends: []
+    depends: [networking]
+
+  # Cache depends on networking
+  - name: cache
+    modules:
+      - name: redis
+        depends: []
+    depends: [networking]
+
+  # Networking is the base layer
+  - name: networking
+    modules:
+      - name: vpc
+        depends: []
+      - name: security-groups
+        depends: [vpc]
+

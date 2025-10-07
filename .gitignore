@@ -1,0 +1,5 @@
+/target
+.envie.yaml
+.envie.yml
+!.envie.example.yaml
+.envie/

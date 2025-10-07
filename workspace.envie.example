@@ -1,0 +1,59 @@
+# Workspace Configuration
+# This file defines the overall project structure and environment configurations
+
+version: "1.0"
+
+project:
+  name: my-terraform-monorepo
+  description: Multi-service Terraform monorepo with ephemeral environments
+
+# Environment definitions
+environments:
+  # Ephemeral environments (auto-created by Envie)
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    backend:
+      type: s3
+      config:
+        bucket: "terraform-state-ephemeral"
+        region: "eu-west-1"
+        key_pattern: "ephemeral/{workspace}/{service}/{module}/terraform.tfstate"
+  
+  # Stable environments (managed externally)
+  stable:
+    sandbox:
+      workspace: "sandbox"
+      backend:
+        type: s3
+        config:
+          bucket: "terraform-state-stable"
+          region: "eu-west-1"
+          key_pattern: "stable/{environment}/{service}/{module}/terraform.tfstate"
+      description: "Shared sandbox for testing"
+    
+    staging:
+      workspace: "staging"
+      backend:
+        type: s3
+        config:
+          bucket: "terraform-state-stable"
+          region: "eu-west-1"
+          key_pattern: "stable/{environment}/{service}/{module}/terraform.tfstate"
+      description: "Pre-production environment"
+    
+    production:
+      workspace: "production"
+      backend:
+        type: s3
+        config:
+          bucket: "terraform-state-stable"
+          region: "eu-west-1"
+          key_pattern: "stable/{environment}/{service}/{module}/terraform.tfstate"
+      description: "Production environment"
+
+# Service discovery - Envie will look for .envie files in these paths
+services:
+  - path: services/api
+  - path: services/database
+  - path: services/networking
+  - path: services/frontend

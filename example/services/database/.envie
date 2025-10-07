@@ -1,0 +1,23 @@
+# Database Service Configuration
+# Depends on networking for VPC and security groups
+
+name: database
+description: Database layer with DynamoDB and RDS
+
+modules:
+  - name: dynamodb
+    path: modules/dynamodb
+    depends:
+      - path: ../networking/modules/vpc
+        environment: ephemeral
+
+  - name: rds
+    path: modules/rds
+    depends:
+      - path: ../networking/modules/vpc
+        environment: ephemeral
+      - path: ../networking/modules/security-groups
+        environment: ephemeral
+
+depends:
+  - ../networking

@@ -1,0 +1,30 @@
+# API Service Configuration
+# Depends on database and networking, demonstrates cross-environment references
+
+name: api
+description: API Gateway and Lambda functions with Step Functions
+
+modules:
+  - name: lambda
+    path: modules/lambda
+    depends:
+      - path: ../../database/modules/dynamodb
+        environment: stable.sandbox  # Use sandbox database
+      - path: ../../networking/modules/vpc
+        environment: ephemeral  # Use current MR VPC
+
+  - name: step-functions
+    path: modules/step-functions
+    depends:
+      - path: ./lambda
+        environment: ephemeral  # Use current MR lambda
+
+  - name: gateway
+    path: modules/gateway
+    depends:
+      - path: ./step-functions
+        environment: ephemeral  # Use current MR step functions
+
+depends:
+  - ../database
+  - ../networking

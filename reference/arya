@@ -1,0 +1,1037 @@
+#!/bin/bash
+
+# Color codes
+BLUE="\033[1;34m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+RED="\033[31m"
+RESET="\033[0m"
+
+declare verbose=false
+
+# Function to handle script output messages, respecting the SUPPRESS_ECHO flag
+print_msg() {
+  if [[ -z "$SUPPRESS_ECHO" ]]; then
+    echo -e "$@"
+  fi
+}
+
+# Functions to print yellow, green and red messages
+print_blue() {
+  print_msg "${BLUE}$@${RESET}"
+}
+
+print_green() {
+  print_msg "${GREEN}$@${RESET}"
+}
+
+print_yellow() {
+  print_msg "${YELLOW}$@${RESET}"
+}
+
+print_red() {
+  print_msg "${RED}$@${RESET}"
+}
+
+# Function to run terraform commands
+terraform_command() {
+  local command=$1
+  local error_msg=$2
+  shift 2
+
+  local args=("$@")
+
+  [[ "$command" == "apply" || "$command" == "destroy" ]] && args+=("-auto-approve") && args+=("-input=false")
+
+  if [[ "$verbose" == true ]]; then
+    echo -e "${BLUE}>> Running: terraform ${command} ${args[*]}${RESET}"
+    GODEBUG=asyncpreemptoff=1 terraform ${command} ${args[@]} || { print_red "$error_msg"; exit 1; }
+  else
+    GODEBUG=asyncpreemptoff=1 terraform ${command} ${args[@]} >/dev/null || { print_red "$error_msg"; exit 1; }
+  fi
+}
+
+# Function to handle cleanup tasks like changing directory and running usage sync
+usage_sync() {
+  cd "$wd" && node cli/usagesync/index.js arya
+  find . -name "*.arya" -type f -delete
+}
+
+# Function to run braavos commands
+braavos_command() {
+  local command=$1
+  local error_msg=$2
+  shift 2
+
+  local args=("$@")
+
+  if [[ "$verbose" != true && ("$command" == "start" || "$command" == "destroy") ]]; then
+    args+=("--quiet")
+  fi
+
+  if [[ "$verbose" == true ]]; then
+    echo -e "${BLUE}>> Running: braavos ${command} ${args[*]}${RESET}"
+  fi
+
+  braavos ${command} ${args[@]} || { print_red $error_msg; usage_sync; exit 1; }
+}
+
+# Function to get the repository name
+get_repo_name() {
+  local git_origin_url=$(git config --get remote.origin.url)
+  local repo_name=$(basename "$git_origin_url" .git)
+  echo "$repo_name"
+}
+
+# declate no_prompt flag
+declare no_prompt=false
+
+# declare associative arrays to store component dependencies and service components
+declare -A component_deps
+declare -A service_components
+
+# declare variable to store environment for each dependency
+declare -A component_envs
+declare -A envs
+declare default_env
+
+# declare array to store deployment order
+declare deployment_order=()
+
+# declare array to store destroy order
+declare destroy_order=()
+
+# declare important directories
+declare wd=$(pwd)
+declare script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+declare app_dir=$(dirname "$script_dir")
+
+# Parse the terraform layers JSON content
+parse_layers() {
+  local json_content="$1"
+
+  # Read all services and their components into associative arrays
+  local services_length=$(echo "$json_content" | jq '.services | length')
+  for ((i = 0; i < services_length; i++)); do
+    local service_name=$(echo "$json_content" | jq -r ".services[$i].name")
+    local components_length=$(echo "$json_content" | jq ".services[$i].components | length")
+    for ((j = 0; j < components_length; j++)); do
+      local component_name=$(echo "$json_content" | jq -r ".services[$i].components[$j].name")
+      local full_name="${service_name}/${component_name}"
+
+      local deps=$(echo "$json_content" | jq -r ".services[$i].components[$j].depends[]?")
+      # loop through the deps and resolve their fullname.
+      # If it is a fullname, then do nothing.
+      # If the dep is a component in the same service, resolve the fullname
+      # if the dep is another service, resolve the fullname of the components in that service
+      local resolved_deps=""
+      for dep in $deps; do
+        if [[ "$dep" == *"/"* ]]; then
+          resolved_deps+="$dep "
+        else
+          local in_service_dep=$(echo "$json_content" | jq -r ".services[$i].components[].name" | grep -wo "$dep")
+          if [[ -n "$in_service_dep" ]]; then
+            # Dependency is a component in the same service
+            resolved_deps+="${service_name}/${dep} "
+          else
+            # Dependency is a service, resolve the components in that service
+            local dep_comps=$(echo "$json_content" | jq -r ".services[] | select(.name == \"$dep\") | .components[].name")
+            # Read each line of output from the variable into the array
+            declare -a dep_comps_array
+            while IFS= read -r line; do
+              dep_comps_array+=("$line")
+            done <<<"$dep_comps"
+
+            for dep_comp in "${dep_comps_array[@]}"; do
+              resolved_deps+="${dep}/${dep_comp} "
+            done
+          fi
+        fi
+      done
+
+      # Store the component and its dependencies
+      component_deps["$full_name"]=$resolved_deps
+
+      # Store the component in the service
+      service_components["$service_name"]+="$component_name "
+    done
+  done
+}
+
+# Parse the terraform layers JSON content and determine the deployment sequence
+parse_deps() {
+  local target="$1"
+
+  declare -A visited
+  declare -A recursion_stack
+
+  # Recursive function to resolve dependencies and decide deployment order
+  function resolve_dependencies() {
+    local component="$1"
+
+    # Check if this component is already in the recursion stack
+    if [[ ${recursion_stack["$component"]} == "in_stack" ]]; then
+      print_red "Error: Cyclic dependency detected involving component $component"
+      exit 1
+    fi
+
+    # Check if this component has been visited already
+    if [[ ${visited["$component"]} ]]; then
+      return
+    fi
+
+    # Mark this component as visited and add to recursion stack
+    visited["$component"]=1
+    recursion_stack["$component"]="in_stack"
+
+    # Recursively resolve component dependencices
+    local deps="${component_deps[$component]}"
+    read -ra deps <<<"$deps"
+    # loop through the deps and resolve their dependencies
+    for dep in "${deps[@]}"; do
+      resolve_dependencies "$dep"
+    done
+
+    # Remove from recursion stack and add this component to the deployment order
+    recursion_stack["$component"]="processed"
+    deployment_order+=("$component")
+  }
+
+  # Start resolving from the target
+  if [[ "$target" == *"/"* ]]; then
+    resolve_dependencies "$target"
+  else
+    # Target is a service, resolve for all components in the service
+    for comp in ${service_components["$target"]}; do
+      resolve_dependencies "${target}/${comp}"
+    done
+  fi
+}
+
+resolve_deployment_env() {
+  local target="$1"
+  declare -A targets
+  declare -A service_envs
+
+  # define the target service or service/component
+  if [[ "$target" == *"/"* ]]; then
+    targets["$target"]=1
+  else
+    for comp in ${service_components["$target"]}; do
+      targets["${target}/${comp}"]=1
+    done
+  fi
+
+  # handle environment specified for entire services
+  for key in "${!component_envs[@]}"; do
+    if [[ "$key" != *"/"* ]]; then
+      for comp in ${service_components["$key"]}; do
+        service_envs["$key/$comp"]="${component_envs[$key]}"
+      done
+    fi
+  done
+
+  # loop through the deployment order and resolve the environment for each component
+  for comp in "${deployment_order[@]}"; do
+    # if the component has an environment specified, use that
+    local comp_env="${component_envs[$comp]}"
+    if [[ -z "$comp_env" ]]; then
+      # check if the component's service has an environment specified
+      comp_env="${service_envs[$comp]}"
+    fi
+    if [[ -z "$comp_env" ]]; then
+      # if the component is in the target service or service/component, use dev
+      if [[ -n "${targets[$comp]}" ]]; then
+        comp_env="dev"
+      else
+        # if the component is not in the target service or service/component, use the default environment
+        if [[ -z $default_env ]]; then
+          if [[ $no_prompt == true ]]; then
+            comp_env="dev"
+          else
+            # if no default environment is specified, prompt the user to choose an environment
+            print_yellow "No environment specified for $comp. Please choose an environment:"
+            select env in "dev" "dev0" "sandbox"; do
+              case $env in
+              dev | dev0 | sandbox)
+                comp_env=$env
+                break
+                ;;
+              *)
+                echo "Invalid option. Please choose again."
+                ;;
+              esac
+            done
+          fi
+        else
+          comp_env="$default_env"
+        fi
+      fi
+    fi
+    envs["$comp"]="$comp_env"
+  done
+}
+
+# Print the deployment order
+print_deployment_order() {
+  print_msg "Deployment order for ${GREEN}service: $1${RESET}"
+  local index=1
+  for comp in "${deployment_order[@]}"; do
+    print_yellow "  $index. $comp: ${envs[$comp]}"
+    ((index++))
+  done
+}
+
+# Deploy function
+deploy() {
+  local service="$1"
+  local workspace="$2"
+
+  # create or use an arya workspace
+  # comma separated list of deps and their environments
+  local deps=""
+  for comp in "${deployment_order[@]}"; do
+    deps+="\"$comp:${envs[$comp]}\","
+  done
+  deps="${deps%,}" # remove trailing comma
+
+  # Assume the terraform-apply role (required for CI runs)
+  aws_sts_output=$(aws sts assume-role \
+    --role-arn arn:aws:iam::671446661642:role/terraform-apply \
+    --role-session-name arya-tf-apply \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text)
+  export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" $aws_sts_output)
+
+  # cd into .arya directory
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  # run terraform init
+  terraform_command "init" "Failed to initialize arya state"
+
+  # check if the workspace exists
+  if terraform workspace list | grep -qE "\\b${workspace}\\b"; then
+    print_green ">> Activating arya environment: $workspace."
+    terraform_command "workspace" "Failed to activate arya environment" "select" "$workspace"
+  else
+    print_green ">> Creating a new arya environment: $workspace."
+    terraform_command "workspace" "Failed to create a new arya environment" "new" "$workspace"
+  fi
+
+  # apply the terraform configuration with the service and deps variables
+  terraform_command "apply" "Failed to create a new arya environment" "-var" "service=$service" "-var" "dependencies=[$deps]"
+
+  # loop through the deployment order and deploy each component if the environment is dev; use braavos start command
+  for comp in "${deployment_order[@]}"; do
+    if [[ "${envs[$comp]}" == "dev" ]]; then
+      print_green ">> Deploying component: $comp"
+      # cd into the component directory
+      cd "${wd}/services/$comp/temp_deployments" || { print_red "The component directory can't be found for ${comp}"; exit 1; }
+      braavos_command "start" "Failed to deploy component $comp" "$workspace"
+    else
+      print_green ">> Skipping deployment of component: $comp in environment: ${envs[$comp]}."
+    fi
+  done
+  usage_sync
+}
+
+link_deployments() {
+  local repo_name=$(get_repo_name)
+  local merge_request_id=$1
+
+  print_green ">>><<<< REPO NAME: $repo_name"
+
+  # loop through each deployed service that has dependencies
+  for comp in "${deployment_order[@]}"; do
+    # if the component has dependencies, link the deployments
+    if [[ -n "${component_deps[$comp]}" ]]; then
+      print_green ">> Generating state variables for component: $comp"
+      local state_variables=""
+      # loop through the dependencies
+      for dep in ${component_deps[$comp]}; do
+        local service_name="${dep%%/*}"
+        local component_name="${dep#*/}"
+        local env="${envs[$dep]}"
+
+        if [[ "$env" == "dev" ]]; then
+          bucket="dev.terraform.runa.io"
+          key="env:/${repo_name}-${merge_request_id}/treasury/${repo_name}/${service_name}/${component_name}/terraform.tfstate"
+        else
+          bucket="runa-terraform-state-store-sandbox"
+          key="ledger-${service_name}/${env}/terraform.tfstate"
+        fi
+
+        state_variables+="terraform_remote_state_${service_name}_${component_name} = {\n"
+        state_variables+="  backend = \"s3\"\n"
+        state_variables+="  config = {\n"
+        state_variables+="    bucket = \"$bucket\"\n"
+        state_variables+="    key    = \"$key\"\n"
+        state_variables+="    region = \"eu-west-1\"\n"
+        state_variables+="  }\n"
+        state_variables+="}\n"
+      done
+
+      # cd into the component directory
+      cd "${wd}/services/$comp/temp_deployments" || { print_red "The component directory can't be found for ${comp}"; exit 1; }
+
+      # write the state variables to a state.auto.tfvars file
+      # clean the file if it exists
+      if [[ -f state.auto.tfvars ]]; then
+        > state.auto.tfvars
+      fi
+      printf "%b\n" "$state_variables" > state.auto.tfvars
+    fi
+  done
+}
+
+# Display start help information
+start_help() {
+  print_yellow "\nUsage: arya --service SERVICE_NAME --merge-request MERGE_REQUEST_ID [options]\n"
+  print_msg "  Initializes a new environment for a specific service or component and a merge request,"
+  print_msg "  setting up all necessary dependencies as defined in a configuration file."
+  print_msg "  If no configuration file is specified, it defaults to '.tf.layers.json'.\n"
+
+  print_yellow "Options:\n"
+
+  print_blue "  --service, -S SERVICE_NAME"
+  print_msg "                  The name of the service to be deployed."
+  print_msg "                  This parameter is required.\n"
+
+  print_blue "  --merge-request, -MR MERGE_REQUEST_ID"
+  print_msg "                  The ID of the merge request to base the deployment on."
+  print_msg "                  This parameter is required.\n"
+
+  print_blue "  --config, -C CONFIG_DATA"
+  print_msg "                  Direct JSON string input that contains the configuration data"
+  print_msg "                  for the terraform layers of the project.\n"
+
+  print_blue "  --config-file, -F FILE_PATH"
+  print_msg "                  Path to a file containing terraform layers JSON configuration data.\n"
+
+  print_blue "  --environment, -E COMPONENT_NAME:ENVIRONMENT"
+  print_msg "                  Sets the deployment environment for a specific component."
+  print_msg "                  Multiple --environment flags can be used."
+  print_msg "                  If 'default:' is specified as the COMPONENT_NAME,"
+  print_msg "                  sets the default environment for all components unless overridden.\n"
+
+  print_blue "  --dry-run, -D"
+  print_msg "                  If specified, the script will simulate the deployment"
+  print_msg "                  process and print the planned actions without making any changes.\n"
+
+  print_blue "  --no-prompt, -NP"
+  print_msg "                  If specified, the script will not prompt for inputs and will"
+  print_msg "                  use default values where interactive input would normally be required.\n"
+
+  print_blue "  --verbose"
+  print_msg "                  If specified, the script will print detailed output during execution.\n"
+
+  print_blue "  --help, -h      Displays this help information and exits.\n"
+
+  print_yellow "Examples:"
+  print_msg "  arya --service my-service --merge-request 123 --config-file ./config.json --environment default:dev"
+  print_msg "  arya --service my-service --merge-request 123 --config '{\"key\": \"value\"}' --dry-run"
+}
+
+# start
+start() {
+  # Parse command line arguments
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    --service | -S)
+      service_name="$2"
+      shift
+      ;;
+    --merge-request | -MR)
+      merge_request="$2"
+      shift
+      ;;
+    --config | -C)
+      config_data="$2"
+      shift
+      ;;
+    --config-file | -F)
+      config_data=$(cat "$2")
+      shift
+      ;;
+    --environment | -E)
+      # dependency environment option follows this convention --environment "component_name:environment"
+      # e.g. --environment "component1:dev" --environment "component2:prod"
+      # This will set the environment for component1 to dev and component2 to prod
+      if [[ "$2" == "default:"* ]]; then
+        default_env="${2#default:}"
+      else
+        component_envs["${2%%:*}"]="${2#*:}"
+      fi
+      shift
+      ;;
+    --dry-run | -D)
+      dry_run=true
+      ;;
+    --no-prompt | -NP)
+      no_prompt=true
+      ;;
+    --verbose)
+      verbose=true
+      ;;
+    --help | -h)
+      start_help
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown parameter passed ($1)"
+      exit 1
+      ;;
+    esac
+    shift
+  done
+
+  # Check if service name is provided
+  if [[ -z "$service_name" ]]; then
+    print_red "Error: --service parameter is required"
+    exit 1
+  fi
+
+  # Check if config data is provided
+  if [[ -z "$config_data" ]]; then
+    # read default config from a `.tf.layers.json` file from current directory
+    config_data=$(cat .tf.layers.json)
+
+    if [[ -z "$config_data" ]]; then
+      print_red "Error: --config parameter, --config-file parameter, or a .tf.layers.json file is required."
+      exit 1
+    fi
+  fi
+
+  # Check if merge request is provided
+  if [[ -z "$merge_request" ]]; then
+    print_red "Error: --merge-request parameter is required"
+    exit 1
+  fi
+
+  # Check that merge request parameter follows the pattern number{-numbers-letters}
+  if [[ ! "$merge_request" =~ ^[0-9]+(-[0-9a-zA-Z]+)?$ ]]; then
+    print_red "Error: Invalid merge request number. Merge request number should follow the pattern number{-numbers|letters}"
+    exit 1
+  fi
+
+  # Parse the layers JSON content
+  parse_layers "$config_data"
+
+  # validate that service or service/component exists
+  if [[ ! -v component_deps["$service_name"] ]]; then
+    if [[ -z "${service_components["$service_name"]}" ]]; then
+      print_red "Error: $service_name not found in the layers configuration"
+      exit 1
+    fi
+  fi
+
+  # Parse the dependencies and determine the deployment order
+  parse_deps "$service_name"
+
+  # Validate that the environment for each component is valid
+  for comp in "${!component_envs[@]}"; do
+    if [[ "${component_envs[$comp]}" != "dev" && "${component_envs[$comp]}" != "dev0" && "${component_envs[$comp]}" != "sandbox" ]]; then
+      print_red "Error: Invalid environment for component $comp. Valid environments are dev, dev0, sandbox."
+      exit 1
+    fi
+  done
+
+  # Validate that the default environment is valid
+  if [[ -n "$default_env" && "$default_env" != "dev" && "$default_env" != "dev0" && "$default_env" != "sandbox" ]]; then
+    print_red "Error: Invalid default environment. Valid environments are dev, dev0, sandbox."
+    exit 1
+  fi
+
+  # resolve the environment for each component
+  resolve_deployment_env "$service_name"
+
+  # if dry-run flag is set, print the deployment order and exit
+  if [[ "$dry_run" == true ]]; then
+    print_deployment_order "$service_name"
+    exit 0
+  else
+    link_deployments "$merge_request"
+    deploy "$service_name" "$merge_request"
+    exit 0
+  fi
+}
+
+# print the destroy order
+print_destroy_order() {
+  print_msg "Destroy order for ${GREEN}service: $1${RESET}"
+  local index=1
+  # print comp from the destroy order in reverse order
+  for comp in $(echo "${destroy_order[@]}" | tr ' ' '\n' | tac); do
+    # extract component name and environment from the comp
+    local comp_name="${comp%%:*}"
+    local comp_env="${comp#*:}"
+    # if component is using other than dev environment skip it
+    if [[ "$comp_env" != "dev" ]]; then
+      # print skipped component
+      print_blue "  $index. $comp_name: $comp_env (skipped)"
+    else
+      # print component
+      print_yellow "  $index. $comp_name: $comp_env"
+    fi
+    ((index++))
+  done
+}
+
+# remove the deployments for dev components
+remove() {
+  local service="$1"
+  local workspace="$2"
+
+  # print destroy start message
+  print_green ">> Destroying deployments for service: $service"
+
+  # loop through the destroy order and destroy each component if the environment is dev; use braavos destroy command
+  for comp in $(echo "${destroy_order[@]}" | tr ' ' '\n' | tac); do
+    # extract component name and environment from the comp
+    local comp_name="${comp%%:*}"
+    local comp_env="${comp#*:}"
+    # if component is using other than dev environment skip it
+    if [[ "$comp_env" == "dev" ]]; then
+      print_green ">> Destroying component: $comp_name"
+      # cd into the component directory
+      cd "${wd}/services/$comp_name/temp_deployments" || { print_red "The component directory can't be found for ${comp_name}"; exit 1; }
+      braavos_command "destroy" "Failed to destroy component $comp_name" "$workspace"
+    else
+      print_green ">> Skipping destruction of component: $comp_name in environment: $comp_env."
+    fi
+  done
+
+  # cd into .arya directory
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  # destroy the terraform configuration
+  terraform_command "destroy" "Failed to destroy arya environment" "-var" "service=$service" "-var" "dependencies=[]"
+
+  # select the default workspace
+  terraform_command "workspace" "Failed to select default arya environment" "select" "default"
+
+  # remove the arya workspace
+  terraform_command "workspace" "Failed to remove arya environment" "delete" "$workspace"
+
+  # print destroy success message
+  print_green ">> Successfully destroyed arya environment: $workspace."
+}
+
+# Display destroy help information
+destroy_help() {
+  print_yellow "\nUsage: arya destroy [options]\n"
+  print_msg "  Destroys the environment for a specific service or component based on a merge request."
+  print_msg "  If no merge request is specified, the current arya environment is destroyed.\n"
+
+  print_yellow "Options:\n"
+
+  print_blue "  --merge-request, -MR MERGE_REQUEST_ID"
+  print_msg "                  The ID of the merge request to base the destruction on."
+  print_msg "                  If not specified, the current arya environment is destroyed.\n"
+
+  print_blue "  --dry-run, -D"
+  print_msg "                  If specified, the script will simulate the destruction process"
+  print_msg "                  and print the planned actions without making any changes.\n"
+
+  print_blue "  --verbose"
+  print_msg "                  If specified, the script will print detailed output during execution.\n"
+
+  print_blue "  --help, -h      Displays this help information and exits.\n"
+
+  print_yellow "Examples:"
+  print_msg "  arya destroy --merge-request 123"
+  print_msg "  arya destroy --merge-request 123 --dry-run"
+}
+
+# destroy
+destroy() {
+  # Parse command line arguments
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    --merge-request | -MR)
+      workspace="$2"
+      shift
+      ;;
+    --dry-run | -D)
+      dry_run=true
+      ;;
+    --verbose)
+      verbose=true
+      ;;
+    --help | -h)
+      destroy_help
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown parameter passed ($1)"
+      exit 1
+      ;;
+    esac
+    shift
+  done
+
+  # cd into .arya directory
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  # Check if merge request is provided
+  if [[ -z "$workspace" ]]; then
+    # get arya current workspace and set this as the merge request
+    workspace=$(terraform workspace show)
+  fi
+
+  # Check that merge request parameter follows the pattern number{-numbers-letters}
+  if [[ ! "$workspace" =~ ^[0-9]+(-[0-9a-zA-Z]+)?$ ]]; then
+    print_red "Error: Invalid merge request number. Merge request number should follow the pattern number{-numbers|letters}"
+    exit 1
+  fi
+
+  # check if workspace exists
+  if ! terraform workspace list | grep -qE "\\b${workspace}\\b"; then
+    print_red "Error: arya environment $workspace does not exist"
+    exit 1
+  fi
+
+  # select the arya workspace
+  terraform_command "workspace" "Failed to select arya environment" "select" "$workspace"
+
+  # get the service name from the terraform state
+  local service_name=$(terraform output -json service | jq -r '.')
+
+  # get the dependencies from the terraform state
+  destroy_order=$(terraform output -json dependencies | jq -r '.[]')
+
+  # if dry-run flag is set, print the destroy order and exit
+  if [[ "$dry_run" == true ]]; then
+    print_destroy_order "$service_name"
+    exit 0
+  else
+    remove "$service_name" "$workspace"
+    exit 0
+  fi
+}
+
+list() {
+  # cd into .arya directory
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  local workspaces=$(terraform workspace list | grep -v 'default')
+  if [[ -z "$workspaces" ]]; then
+    print_yellow "No development environments available."
+    exit 0
+  fi
+
+  print_green "Available development environments:"
+  print_blue "$workspaces"
+}
+
+current() {
+  # cd into .arya directory
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  local workspace=$(terraform workspace show)
+  if [[ "$workspace" == "default" ]]; then
+    print_yellow "No development environment is currently active."
+    exit 0
+  fi
+
+  print_green "Current development environment:"
+  print_blue  "* $workspace"
+}
+
+# Get Terraform outputs for a service
+get_output() {
+  local service="$1"
+  local workspace="$2"
+
+  # Create a file to store combined outputs
+  local combined_outputs_file=$(mktemp)
+
+  
+  # Create a file to store combined outputs
+  local combined_outputs_file=$(mktemp)
+
+  dev_strings=()
+  non_dev_strings=()
+
+  for service in $(echo "${destroy_order[@]}" | tr ' ' '\n'); do
+      if [[ "${service: -4}" == ":dev" ]]; then
+          dev_strings+=("$service")
+      else
+          non_dev_strings+=("$service")
+      fi
+  done
+
+  stable_components=$(printf "%s\n" "${non_dev_strings[@]}")
+  declare -A uniqe_service_envs
+  for comp in $(echo "${stable_components[@]}" | tr ' ' '\n'); do
+    local comp_name="${comp%%:*}"
+    local comp_env="${comp#*:}"
+    local comp_main="${comp%%/*}"
+    # Store the [service, env] pair as a key in the associative array
+    uniqe_service_envs["$comp_main,$comp_env"]=1
+  done
+
+  # Function to handle Terraform output retrieval
+  get_terraform_output() {
+    local dir="$1"
+    local env="$2"
+    local output_file="$3"
+    
+    (
+      cd "$dir" || { print_red "The service directory can't be found for \"$service\""; exit 1; }
+      if [[ "$env" != "dev" ]]; then
+        terraform init -backend-config=backend/$env.conf > /dev/null 2>&1
+      fi
+      if [[ ! -d ".terraform" ]] && [[ ! -f ".terraform/environment" ]]; then
+        # removed while investigating why it's trying to init services that are not in the dependency tree
+        # print_red "Error: Please run 'terraform init' from within the '${dir}' directory and select a workspace."
+        exit 1
+      fi
+      terraform output -json | jq '. as $in | to_entries | map({(.key): .value.value}) | add' >> "$output_file"
+    ) &
+  }
+
+  # Iterate over the unique pairs
+  for key in "${!uniqe_service_envs[@]}"; do
+    IFS=',' read -r service env <<< "$key"
+    get_terraform_output "${app_dir}/services/$service/stable_deployments" "$env" "$combined_outputs_file"
+  done
+
+  # Wait for all background processes to finish
+  wait
+
+  dev_components=$(printf "%s\n" "${dev_strings[@]}")
+  for comp in $(echo "${dev_components[@]}" | tr ' ' '\n'); do
+    local comp_name="${comp%%:*}"
+    local comp_env="${comp#*:}"
+    get_terraform_output "${app_dir}/services/$comp_name/temp_deployments" "$comp_env" "$combined_outputs_file"
+  done
+
+  # Wait for all background processes to finish
+  wait
+
+  # Combine all outputs into a single JSON object
+  jq -s 'add' "$combined_outputs_file"
+
+  # Clean up temporary file
+  rm -f "$combined_outputs_file"
+}
+
+# Output combined Terraform outputs
+output() {
+  local output_file=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+    --file | -f)
+      output_file="$2"
+      shift
+      ;;
+    --verbose)
+      verbose=true
+      ;;
+    --help | -h)
+      output_help
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown parameter passed ($1)"
+      exit 1
+      ;;
+    esac
+    shift
+  done
+
+  if [[ -n "$output_file" && ! -d $(dirname "$output_file") ]]; then
+    echo "Error: The directory for the output file does not exist: $(dirname "$output_file")"
+    exit 1
+  fi
+
+  cd "$script_dir/.arya" || { print_red "The .arya state directory can't be found"; exit 1; }
+
+  workspace=$(terraform workspace show)
+
+  terraform_command "workspace" "Failed to select arya environment" "select" "$workspace"
+
+  local service_name=$(terraform output -json service | jq -r '.')
+
+  destroy_order=$(terraform output -json dependencies | jq -r '.[]')
+
+  # Get combined Terraform outputs
+  local combined_output=$(get_output "$service_name" "$workspace")
+
+  # Print output to console and save to file if specified
+  if [[ -n "$output_file" ]]; then
+    local full_path=$(realpath "$output_file")
+    echo "$combined_output" > "$output_file"
+    print_green "Terraform outputs saved to $full_path"
+  else
+    print_blue "Combined Terraform outputs for service: $service_name"
+    echo "$combined_output"
+  fi
+
+  exit 0
+}
+
+# Display output help information
+output_help() {
+  print_yellow "\nUsage: arya output [options]\n"
+  print_msg "  Generates combined outputs for all services and components in the current workspace.\n"
+
+  print_yellow "Options:\n"
+
+  print_blue "  --help, -h      Displays this help information and exits.\n"
+
+  print_yellow "Examples:"
+  print_msg "  arya output"
+  print_msg "  arya output --help"
+}
+
+# Function to clean .terraform directories and initialize terraform
+clean() {
+  local BASE_DIR
+  BASE_DIR="$(dirname "$(dirname "$0")")"
+  local SERVICES_DIR="$BASE_DIR/services"
+  local ARYA_DIR="$BASE_DIR/cli/.arya"
+  local SERVICE_NAME=""
+  local UPGRADE=false
+
+  # Parse command line arguments for clean
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --service)
+        SERVICE_NAME="$2"
+        shift
+        ;;
+      --upgrade)
+        UPGRADE=true
+        ;;
+      --verbose)
+        verbose=true
+        ;;
+      --help | -h)
+        clean_help
+        exit 0
+        ;;
+      *)
+        echo "Error: unknown parameter passed ($1)"
+        exit 1
+        ;;
+    esac
+    shift
+  done
+
+  if [[ -z "$SERVICE_NAME" ]]; then
+    print_blue "Cleaning all services"
+  else
+    print_blue "Cleaning service: $SERVICE_NAME"
+    SERVICES_DIR="$SERVICES_DIR/$SERVICE_NAME"
+  fi
+
+  # Find and delete all .terraform directories in the specified services, excluding stable_deployments
+  find "$SERVICES_DIR" -type d -name ".terraform" ! -path "*/stable_deployments/*" -exec rm -rf {} +
+  print_green "Deleted all .terraform directories in specified services, excluding stable_deployments."
+
+  # Find all directories containing main and temp_deployments
+  local MAIN_DIRS
+  MAIN_DIRS=$(find "$SERVICES_DIR" -type d -name "main")
+  local TEMP_DEPLOYMENT_DIRS
+  TEMP_DEPLOYMENT_DIRS=$(find "$SERVICES_DIR" -type d -name "temp_deployments")
+
+  # Initialize terraform and select default workspace in each directory
+  for DIR in $MAIN_DIRS $TEMP_DEPLOYMENT_DIRS; do
+    print_blue "Initializing Terraform in $DIR"
+    cd "$DIR" || exit
+
+    if [[ "$UPGRADE" == true ]]; then
+      terraform init -upgrade
+    else
+      terraform init
+    fi
+
+    terraform workspace select default
+  done
+
+  print_green "Terraform initialization and workspace selection complete in specified services."
+
+  # Clean .terraform directory in .arya
+  print_blue "Cleaning .terraform directory in .arya"
+  cd "$ARYA_DIR" || exit
+  rm -rf .terraform
+
+  if [[ "$UPGRADE" == true ]]; then
+    terraform init -upgrade
+  else
+    terraform init
+  fi
+  terraform workspace select default
+  print_green "Terraform initialization and workspace selection complete in .arya."
+}
+
+clean_help() {
+  print_yellow "\nUsage: arya clean [--service SERVICE_NAME] [--upgrade]\n"
+  print_msg "  Cleans .terraform directories and reinitializes Terraform for specified services."
+  print_msg "  If no service is specified, cleans all services.\n"
+
+  print_yellow "Options:\n"
+
+  print_blue "  --service SERVICE_NAME"
+  print_msg "                  The name of the service to clean."
+  print_msg "                  If not specified, cleans all services.\n"
+
+  print_blue "  --upgrade"
+  print_msg "                  Runs 'terraform init -upgrade' instead of 'terraform init'.\n"
+
+  print_blue "  --verbose"
+  print_msg "                  If specified, the script will print detailed output during execution.\n"
+
+  print_blue "  --help, -h"
+  print_msg "                  Displays this help information and exits.\n"
+
+  print_yellow "Examples:"
+  print_msg "  arya clean"
+  print_msg "  arya clean --upgrade"
+  print_msg "  arya clean --service balances"
+}
+
+# Display help information
+help() {
+  print_yellow "\nUsage: arya COMMAND [options]\n"
+  print_msg "  A tool to manage the deployment and destruction of services and components"
+  print_msg "  based on a configuration file that defines the dependencies between them.\n"
+
+  print_yellow "Commands:\n"
+
+  print_blue "  start           Initializes a new environment for a specific service or component and a merge request,"
+  print_msg "                  setting up all necessary dependencies as defined in a configuration file.\n"
+
+  print_blue "  destroy         Destroys the environment for a specific service or component based on a merge request."
+  print_msg "                  If no merge request is specified, the current arya environment is destroyed.\n"
+
+  print_blue "  list            Lists all available development environments.\n"
+
+  print_blue "  current         Displays the current development environment.\n"
+
+  print_blue "  help            Displays this help information and exits.\n"
+
+  print_yellow "Examples:"
+  print_msg "  arya start --service my-service --merge-request 123 --config-file ./config.json --environment default:dev"
+  print_msg "  arya destroy --merge-request 123"
+  print_msg "  arya list"
+  print_msg "  arya current"
+  print_msg "  arya clean"
+}
+
+# main function
+# Check if the script is being run directly or sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  case "$1" in
+    start | destroy | list | current | output | help | clean)
+      "$1" "${@:2}"
+      ;;
+    *)
+      print_red "Error: Invalid command. Use 'start', 'destroy', 'list', 'current', 'output', or 'help'."
+      exit 1
+      ;;
+  esac
+fi
