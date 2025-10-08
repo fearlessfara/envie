@@ -261,12 +261,12 @@ tags = {{
         // Generate tfvars file
         let tfvars_content = self.generate_tfvars_file(project_name, environment_id, module_name);
         
-        // Write backend configuration file
-        let backend_file = module_path.join(".envie-backend.tf");
+        // Write backend configuration file (visible, not hidden)
+        let backend_file = module_path.join("envie-backend.tf");
         std::fs::write(backend_file, backend_content)?;
-        
-        // Write remote state data sources file
-        let remote_state_file = module_path.join(".envie-remote-state.tf");
+
+        // Write remote state data sources file (visible, not hidden)
+        let remote_state_file = module_path.join("envie-remote-state.tf");
         std::fs::write(remote_state_file, remote_state_content)?;
         
         // Write tfvars file

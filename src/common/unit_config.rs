@@ -127,31 +127,64 @@ impl StateManagement {
     pub fn is_dedicated(&self) -> bool {
         matches!(self, StateManagement::Dedicated)
     }
-    
+
     pub fn is_parent(&self) -> bool {
         matches!(self, StateManagement::Parent)
     }
-    
+
     pub fn is_shared(&self) -> bool {
         matches!(self, StateManagement::Shared(_))
     }
-    
+
     pub fn is_group(&self) -> bool {
         matches!(self, StateManagement::Group(_))
     }
-    
+
     pub fn shared_id(&self) -> Option<&String> {
         match self {
             StateManagement::Shared(id) => Some(id),
             _ => None,
         }
     }
-    
+
     pub fn group_id(&self) -> Option<&String> {
         match self {
             StateManagement::Group(id) => Some(id),
             _ => None,
         }
+    }
+}
+
+impl UnitConfig {
+    /// Validate environment references in dependencies
+    /// Returns Ok if all environment references are valid, or an error with details
+    pub fn validate_environment_references(&self, available_stable_envs: &[String]) -> crate::common::Result<()> {
+        for dep in &self.depends {
+            let env = &dep.environment;
+
+            // Check if it's a valid environment reference
+            if env.starts_with("stable.") {
+                let env_name = env.strip_prefix("stable.").unwrap();
+                if !available_stable_envs.contains(&env_name.to_string()) {
+                    return Err(crate::common::EnvieError::ValidationError(format!(
+                        "Invalid stable environment '{}' in unit '{}' dependency on '{}'\n\n\
+                         Available stable environments:\n{}\n\n\
+                         Available ephemeral formats:\n  • ephemeral (current deployment environment)\n  • ephemeral.<id> (specific ephemeral environment)",
+                        env,
+                        self.name,
+                        dep.path,
+                        available_stable_envs.iter().map(|e| format!("  • stable.{}", e)).collect::<Vec<_>>().join("\n")
+                    )));
+                }
+            } else if env == "ephemeral" || env.starts_with("ephemeral.") {
+                // Valid ephemeral reference
+            } else {
+                // Direct workspace reference - we can't validate these at parse time
+                // They will be validated at resolution time
+            }
+        }
+
+        Ok(())
     }
 }
 

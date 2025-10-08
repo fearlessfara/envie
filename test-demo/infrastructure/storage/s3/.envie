@@ -1,4 +1,0 @@
-name: s3
-description: S3 bucket for demo app
-unit_type: component
-state_management: dedicated

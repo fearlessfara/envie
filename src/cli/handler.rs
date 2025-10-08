@@ -72,14 +72,13 @@ impl CommandHandler {
                 destroyer.execute(options).await
             }
             Commands::Delete {
-                unit,
+                unit: _,
                 env,
                 dry_run,
                 no_prompt,
                 verbose,
             } => {
                 let options = DeleteOptions {
-                    unit_name: unit,
                     env_id: env,
                     dry_run,
                     no_prompt,
@@ -107,10 +106,9 @@ impl CommandHandler {
                 let lister = ListCommand::new(self.working_directory.clone());
                 lister.list()
             }
-            Commands::Output { file, verbose } => {
+            Commands::Output { file, verbose: _ } => {
                 let options = OutputOptions {
                     output_file: file.map(|p| p.to_string_lossy().to_string()),
-                    verbose,
                 };
 
                 let output = OutputCommand::new(self.working_directory.clone());
@@ -119,12 +117,11 @@ impl CommandHandler {
             Commands::Clean {
                 service,
                 upgrade,
-                verbose,
+                verbose: _,
             } => {
                 let options = CleanOptions {
                     service_name: service,
                     upgrade,
-                    verbose,
                 };
 
                 let cleaner = CleanCommand::new(self.working_directory.clone());
@@ -132,14 +129,12 @@ impl CommandHandler {
             }
             Commands::Show {
                 service,
-                modules,
-                dependencies,
+                modules: _,
+                dependencies: _,
                 verbose,
             } => {
                 let options = ShowOptions {
                     service,
-                    modules,
-                    dependencies,
                     verbose,
                 };
 
@@ -153,11 +148,10 @@ impl CommandHandler {
         match command {
             EnvCommands::Start {
                 env_id,
-                quiet,
+                quiet: _,
             } => {
                 let options = EnvOptions {
                     merge_request_id: env_id,
-                    quiet,
                 };
 
                 let env_cmd = EnvCommand::new(self.working_directory.clone());
@@ -165,11 +159,10 @@ impl CommandHandler {
             }
             EnvCommands::Destroy {
                 env_id,
-                quiet,
+                quiet: _,
             } => {
                 let options = EnvOptions {
                     merge_request_id: env_id.unwrap_or_default(),
-                    quiet,
                 };
 
                 let env_cmd = EnvCommand::new(self.working_directory.clone());

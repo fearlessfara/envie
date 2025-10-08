@@ -6,7 +6,6 @@ use walkdir::WalkDir;
 pub struct CleanOptions {
     pub service_name: Option<String>,
     pub upgrade: bool,
-    pub verbose: bool,
 }
 
 pub struct CleanCommand {
@@ -152,11 +151,9 @@ mod tests {
         let options = CleanOptions {
             service_name: Some("test-service".to_string()),
             upgrade: true,
-            verbose: false,
         };
-        
+
         assert_eq!(options.service_name, Some("test-service".to_string()));
         assert!(options.upgrade);
-        assert!(!options.verbose);
     }
 }

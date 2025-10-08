@@ -1,0 +1,170 @@
+# Example workspace.envie with multiple stable environments
+# Copy this to workspace.envie and customize for your project
+
+version: '1.0'
+
+project:
+  name: myapp
+  description: My application infrastructure managed by Envie
+
+environments:
+  # ========================================
+  # EPHEMERAL ENVIRONMENTS
+  # ========================================
+  # Temporary environments for:
+  # - Feature branches
+  # - Merge requests
+  # - Developer sandboxes
+  # - CI/CD test runs
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    backend:
+      type: s3
+      config:
+        bucket: "myapp-terraform-state"
+        region: "us-east-1"
+        key_pattern: "ephemeral/{workspace}/{path}/terraform.tfstate"
+        dynamodb_table: "myapp-terraform-locks"
+        encrypt: "true"
+
+  # ========================================
+  # STABLE ENVIRONMENTS
+  # ========================================
+  # Long-lived environments that persist
+  stable:
+    # ------------------------------------
+    # DEV0 - Shared Development Environment
+    # ------------------------------------
+    # Use case: Shared dev environment for integration testing
+    # Who uses: All developers for testing integration between services
+    dev0:
+      workspace: myapp-dev0
+      description: Shared development environment for integration testing
+      backend:
+        type: s3
+        config:
+          bucket: "myapp-terraform-state"
+          region: "us-east-1"
+          key_pattern: "stable/dev0/{path}/terraform.tfstate"
+          dynamodb_table: "myapp-terraform-locks"
+          encrypt: "true"
+
+    # ------------------------------------
+    # SANDBOX - Testing with Sample Data
+    # ------------------------------------
+    # Use case: Testing with realistic sample data
+    # Who uses: Developers testing against shared databases with test data
+    sandbox:
+      workspace: myapp-sandbox
+      description: Sandbox environment with sample data for testing
+      backend:
+        type: s3
+        config:
+          bucket: "myapp-terraform-state"
+          region: "us-east-1"
+          key_pattern: "stable/sandbox/{path}/terraform.tfstate"
+          dynamodb_table: "myapp-terraform-locks"
+          encrypt: "true"
+
+    # ------------------------------------
+    # STAGING - Pre-Production Testing
+    # ------------------------------------
+    # Use case: Final testing before production deployment
+    # Who uses: QA team, automated integration tests
+    # Notes: Should mirror production configuration
+    staging:
+      workspace: myapp-staging
+      description: Staging environment for pre-production testing
+      backend:
+        type: s3
+        config:
+          bucket: "myapp-terraform-state"
+          region: "us-east-1"
+          key_pattern: "stable/staging/{path}/terraform.tfstate"
+          dynamodb_table: "myapp-terraform-locks"
+          encrypt: "true"
+
+    # ------------------------------------
+    # PRODUCTION - Live Environment
+    # ------------------------------------
+    # Use case: Production workloads
+    # Who uses: End users
+    # Notes:
+    # - Separate S3 bucket with stricter access controls
+    # - Separate DynamoDB table for state locking
+    # - Different region for disaster recovery (optional)
+    production:
+      workspace: myapp-production
+      description: Production environment
+      backend:
+        type: s3
+        config:
+          bucket: "myapp-terraform-state-production"  # Separate bucket!
+          region: "us-east-1"
+          key_pattern: "production/{path}/terraform.tfstate"
+          dynamodb_table: "myapp-terraform-locks-production"  # Separate table!
+          encrypt: "true"
+
+defaults: {}
+
+# ========================================
+# COMMON USAGE PATTERNS
+# ========================================
+
+# Pattern 1: Developer working on API changes
+# ------------------------------------------
+# Deploy only your API to ephemeral, use stable dependencies
+# $ envie deploy --unit api --env feature-auth \
+#     -E database:stable.sandbox \
+#     -E networking:stable.dev0
+
+# Pattern 2: Full stack ephemeral environment
+# ------------------------------------------
+# Deploy everything to your own isolated environment
+# $ envie deploy --unit infrastructure --env feature-123
+
+# Pattern 3: Testing against staging before prod
+# ------------------------------------------
+# Deploy to ephemeral but use staging dependencies
+# $ envie deploy --unit api --env pre-prod-test \
+#     -E database:stable.staging \
+#     -E networking:stable.staging
+
+# Pattern 4: Deploy to production
+# ------------------------------------------
+# Deploy directly to production environment
+# $ envie deploy --unit api --env production \
+#     -E database:stable.production \
+#     -E networking:stable.production
+
+# Pattern 5: Mixed environment testing
+# ------------------------------------------
+# Test your code against production database (read-only!)
+# $ envie deploy --unit api --env test-with-prod-data \
+#     -E database:stable.production \
+#     -E networking:stable.dev0
+
+# ========================================
+# TIPS
+# ========================================
+
+# 1. Use separate S3 buckets for production
+#    - Better security (different IAM policies)
+#    - Better cost tracking
+#    - Better disaster recovery
+
+# 2. Use descriptive workspace names
+#    - Easier to identify in AWS console
+#    - Easier to debug issues
+
+# 3. Set up backend infrastructure first
+#    - Envie will auto-create S3 buckets and DynamoDB tables
+#    - Make sure you have AWS credentials configured
+
+# 4. Use consistent naming patterns
+#    - All stable environments: {project}-{env-name}
+#    - All ephemeral: {project}-{id}
+
+# 5. Document who should use each environment
+#    - Add descriptions to each stable environment
+#    - Create runbooks for common scenarios

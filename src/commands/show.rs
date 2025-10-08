@@ -5,8 +5,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct ShowOptions {
     pub service: Option<String>,
-    pub modules: bool,
-    pub dependencies: bool,
     pub verbose: bool,
 }
 
@@ -162,14 +160,10 @@ mod tests {
     fn test_show_options() {
         let options = ShowOptions {
             service: Some("test-service".to_string()),
-            modules: true,
-            dependencies: false,
             verbose: true,
         };
-        
+
         assert_eq!(options.service, Some("test-service".to_string()));
-        assert!(options.modules);
-        assert!(!options.dependencies);
         assert!(options.verbose);
     }
 }

@@ -40,11 +40,20 @@ impl DeployCommand {
         // Discover all units from the project root
         let mut discovery = UnitDiscovery::new(project_root.clone());
         discovery.discover_all()?;
-        
+
         if discovery.registry.units.is_empty() {
             return Err(EnvieError::ValidationError(
                 "No deployable units found. Make sure you have envie.yaml files in your project.".to_string()
             ));
+        }
+
+        // Load environment configuration for validation
+        let environment_config = self.load_environment_config()?;
+
+        // Validate environment references in all units
+        let available_stable_envs: Vec<String> = environment_config.stable.keys().cloned().collect();
+        for unit in discovery.registry.get_all_units() {
+            unit.config.validate_environment_references(&available_stable_envs)?;
         }
         
         // Determine which unit(s) to deploy
@@ -104,25 +113,19 @@ impl DeployCommand {
         // Resolve workspace name
         let project_name = self.get_project_name()?;
         let workspace = format!("{}-{}", project_name, options.env_id);
-        
+
         if options.verbose {
             println!("📦 Deploying {} unit(s)", units_to_deploy.len());
             println!("🌍 Workspace: {}", workspace);
         }
-        
-        // Load environment configuration
-        let environment_config = self.load_environment_config()?;
-        
-        // Check and setup backend infrastructure if needed
-        self.ensure_backend_exists(&environment_config, options.no_prompt, options.verbose).await?;
-        
+
         // Create environment resolver
         let environment_resolver = EnvironmentResolver::new(
             workspace.clone(),
             project_name.clone(),
-            environment_config,
+            environment_config.clone(),
         ).with_available_workspaces(self.get_available_workspaces()?);
-        
+
         // Resolve deployment order (dependencies first)
         let deployment_order = if units_to_deploy.len() == 1 {
             // Single unit - resolve its dependencies
@@ -139,12 +142,20 @@ impl DeployCommand {
                 .filter(|unit| requested_qualified_names.contains(&unit.qualified_name))
                 .collect()
         };
-        
+
         if options.dry_run {
-            self.print_deployment_plan(&deployment_order, &environment_resolver)?;
+            self.print_deployment_plan(&deployment_order, &environment_resolver, &options.environment_overrides, &options.env_id)?;
             return Ok(());
         }
-        
+
+        // Check and setup backend infrastructure if needed (only for actual deployment)
+        self.ensure_backend_exists(&environment_config, options.no_prompt, options.verbose).await?;
+
+        // Print environment resolution if verbose
+        if options.verbose {
+            self.print_environment_resolution(&deployment_order, &environment_resolver, &options.environment_overrides)?;
+        }
+
         // Deploy each unit in order
         self.output_manager.print_green(&format!("\n🚀 Deploying {} unit(s)...\n", deployment_order.len()));
         
@@ -210,8 +221,9 @@ impl DeployCommand {
         )?;
         
         // Initialize and apply Terraform
-        let terraform_manager = TerraformManager::new(&unit_path);
-        
+        let terraform_manager = TerraformManager::new(&unit_path)
+            .with_verbose(options.verbose);
+
         println!("  🔧 Running terraform init...");
         terraform_manager.init()?;
         
@@ -232,47 +244,152 @@ impl DeployCommand {
         Ok(())
     }
     
+    fn print_environment_resolution(
+        &self,
+        deployment_order: &[&DiscoveredUnit],
+        environment_resolver: &EnvironmentResolver,
+        environment_overrides: &HashMap<String, String>,
+    ) -> Result<()> {
+        self.output_manager.print_blue("\n🔍 Resolving dependencies:\n");
+
+        for unit in deployment_order {
+            if !unit.config.depends.is_empty() {
+                println!("  ├─ {}", unit.config.name);
+
+                for (i, dep) in unit.config.depends.iter().enumerate() {
+                    let is_last = i == unit.config.depends.len() - 1;
+                    let prefix = if is_last { "  └─" } else { "  ├─" };
+
+                    // Extract service name from path for override lookup
+                    let (source_service, _) = self.extract_service_module_from_path(&dep.path)?;
+
+                    // Check if there's a CLI override
+                    let environment_to_use = if let Some(override_env) = environment_overrides.get(&source_service) {
+                        override_env.clone()
+                    } else {
+                        dep.environment.clone()
+                    };
+
+                    let resolved_env = environment_resolver.resolve_environment(&environment_to_use)?;
+
+                    // Show if environment was overridden
+                    let override_info = if environment_overrides.contains_key(&source_service) {
+                        format!(" (overridden from '{}')", dep.environment)
+                    } else {
+                        String::new()
+                    };
+
+                    println!("{}  {} → {}{}", prefix, dep.path, environment_to_use, override_info);
+                    println!("  │     Workspace: {}", resolved_env.workspace);
+
+                    // Generate state key for display
+                    let (_, source_module) = self.extract_service_module_from_path(&dep.path)?;
+                    let state_key = environment_resolver.generate_state_key(&resolved_env, &source_service, &source_module);
+
+                    if let Some(bucket) = resolved_env.backend.config.get("bucket") {
+                        println!("  │     State: s3://{}/{}", bucket, state_key);
+                    }
+                }
+                println!();
+            }
+        }
+
+        Ok(())
+    }
+
     fn print_deployment_plan(
         &self,
         deployment_order: &[&DiscoveredUnit],
-        _environment_resolver: &EnvironmentResolver,
+        environment_resolver: &EnvironmentResolver,
+        environment_overrides: &HashMap<String, String>,
+        env_id: &str,
     ) -> Result<()> {
         self.output_manager.print_green("📋 Deployment Plan (Dry Run)\n");
-        
+
+        let project_name = self.get_project_name()?;
+        let workspace = format!("{}-{}", project_name, env_id);
+
+        println!("Environment: {}", env_id);
+        println!("Workspace: {}", workspace);
+        println!();
+
+        // Show dependency resolution
+        println!("Dependencies:");
+        let mut has_dependencies = false;
+        for unit in deployment_order {
+            if !unit.config.depends.is_empty() {
+                has_dependencies = true;
+                for dep in &unit.config.depends {
+                    let (source_service, _) = self.extract_service_module_from_path(&dep.path)?;
+                    let environment_to_use = if let Some(override_env) = environment_overrides.get(&source_service) {
+                        override_env.clone()
+                    } else {
+                        dep.environment.clone()
+                    };
+                    let resolved_env = environment_resolver.resolve_environment(&environment_to_use)?;
+                    println!("  ✓ {} → {} ({})", dep.path, environment_to_use, resolved_env.workspace);
+                }
+            }
+        }
+        if !has_dependencies {
+            println!("  (none)");
+        }
+        println!();
+
         println!("Deployment Order:");
         for (index, unit) in deployment_order.iter().enumerate() {
-            println!("  {}. {} ({:?})", 
-                index + 1, 
-                unit.config.name, 
+            println!("  {}. {} ({:?})",
+                index + 1,
+                unit.config.name,
                 unit.config.unit_type
             );
             println!("     Path: {}", unit.path.display());
             println!("     State: {:?}", unit.config.state_management);
-            
-            if !unit.config.depends.is_empty() {
-                println!("     Dependencies:");
-                for dep in &unit.config.depends {
-                    println!("       - {}", dep.path);
-                }
-            }
             println!();
         }
-        
+
         println!("📊 Summary:");
         println!("  Total units to deploy: {}", deployment_order.len());
-        
+
         // Count by type
         let mut type_counts: HashMap<String, usize> = HashMap::new();
         for unit in deployment_order {
             let type_name = format!("{:?}", unit.config.unit_type);
             *type_counts.entry(type_name).or_insert(0) += 1;
         }
-        
+
         for (unit_type, count) in type_counts {
             println!("  {}: {}", unit_type, count);
         }
-        
+
         Ok(())
+    }
+
+    fn extract_service_module_from_path(&self, path: &str) -> Result<(String, String)> {
+        // Convert source path to service/module
+        // e.g., "../database/modules/dynamodb" -> ("database", "dynamodb")
+        // e.g., "./lambda" -> (current_service, "lambda")
+        // e.g., "../../database/modules/dynamodb" -> ("database", "dynamodb")
+
+        let normalized_source = path
+            .replace("../", "")
+            .replace("./", "")
+            .replace("//", "/");
+
+        let parts: Vec<&str> = normalized_source.split('/').collect();
+
+        if parts.len() >= 2 {
+            let service = parts[0].to_string();
+            let module = parts[parts.len() - 1].to_string();
+            Ok((service, module))
+        } else if parts.len() == 1 {
+            // Local module reference
+            Ok(("current".to_string(), parts[0].to_string()))
+        } else {
+            Err(EnvieError::ValidationError(
+                format!("Invalid source path: {}", path)
+            ))
+        }
     }
     
     fn convert_unit_to_module_config(&self, unit: &DiscoveredUnit) -> ModuleConfig {

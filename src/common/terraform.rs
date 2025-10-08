@@ -133,30 +133,46 @@ impl TerraformManager {
         cmd.arg(command);
         cmd.args(args);
         cmd.current_dir(&self.working_directory);
-        
+
         // Set GODEBUG environment variable as in the original scripts
         cmd.env("GODEBUG", "asyncpreemptoff=1");
 
         if self.verbose {
             println!(">> Running: terraform {} {}", command, args.join(" "));
-        }
-
-        let output = cmd.output();
-
-        match output {
-            Ok(output) => {
-                if output.status.success() {
-                    Ok(())
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    Err(crate::common::EnvieError::TerraformError(
-                        format!("terraform {} failed: {}", command, stderr)
-                    ))
+            // In verbose mode, inherit stdout/stderr to show terraform output
+            let status = cmd.status();
+            match status {
+                Ok(status) => {
+                    if status.success() {
+                        Ok(())
+                    } else {
+                        Err(crate::common::EnvieError::TerraformError(
+                            format!("terraform {} failed with exit code: {}", command, status)
+                        ))
+                    }
                 }
+                Err(e) => Err(crate::common::EnvieError::ProcessError(
+                    format!("Failed to execute terraform {}: {}", command, e)
+                )),
             }
-            Err(e) => Err(crate::common::EnvieError::ProcessError(
-                format!("Failed to execute terraform {}: {}", command, e)
-            )),
+        } else {
+            // In non-verbose mode, capture output
+            let output = cmd.output();
+            match output {
+                Ok(output) => {
+                    if output.status.success() {
+                        Ok(())
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        Err(crate::common::EnvieError::TerraformError(
+                            format!("terraform {} failed: {}", command, stderr)
+                        ))
+                    }
+                }
+                Err(e) => Err(crate::common::EnvieError::ProcessError(
+                    format!("Failed to execute terraform {}: {}", command, e)
+                )),
+            }
         }
     }
 

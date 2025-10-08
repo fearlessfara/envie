@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub struct OutputOptions {
     pub output_file: Option<String>,
-    pub verbose: bool,
 }
 
 pub struct OutputCommand {

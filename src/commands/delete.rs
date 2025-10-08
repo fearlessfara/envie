@@ -4,7 +4,6 @@ use std::io::{self, Write};
 
 #[derive(Debug, Clone)]
 pub struct DeleteOptions {
-    pub unit_name: Option<String>,
     pub env_id: String,
     pub dry_run: bool,
     pub no_prompt: bool,
@@ -93,10 +92,11 @@ impl DeleteCommand {
 
         for unit in &units_to_delete {
             let unit_path = project_root.join(&unit.path);
-            let terraform_manager = TerraformManager::new(&unit_path);
+            let terraform_manager = TerraformManager::new(&unit_path)
+                .with_verbose(options.verbose);
 
             if terraform_manager.workspace_list()?.contains(&workspace) {
-                self.destroy_unit(unit, &project_root, &workspace).await?;
+                self.destroy_unit(unit, &project_root, &workspace, options.verbose).await?;
             } else if options.verbose {
                 println!("⏭️  Skipping unit '{}' - workspace '{}' does not exist\n", unit.config.name, workspace);
             }
@@ -150,13 +150,15 @@ impl DeleteCommand {
         unit: &DiscoveredUnit,
         project_root: &PathBuf,
         workspace: &str,
+        verbose: bool,
     ) -> Result<()> {
         println!("🗑️  Destroying unit: {}", unit.config.name);
         println!("  📍 Path: {}", unit.path.display());
         println!("  🌍 Workspace: {}", workspace);
 
         let unit_path = project_root.join(&unit.path);
-        let terraform_manager = TerraformManager::new(&unit_path);
+        let terraform_manager = TerraformManager::new(&unit_path)
+            .with_verbose(verbose);
 
         // Select the workspace
         println!("  🔧 Selecting workspace...");

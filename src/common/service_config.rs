@@ -1,7 +1,5 @@
-use crate::common::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceConfig {
@@ -73,26 +71,6 @@ impl From<StateManagementString> for StateManagement {
     }
 }
 
-impl StateManagement {
-    pub fn is_dedicated(&self) -> bool {
-        matches!(self, StateManagement::Dedicated)
-    }
-    
-    pub fn is_service(&self) -> bool {
-        matches!(self, StateManagement::Service)
-    }
-    
-    pub fn is_shared(&self) -> bool {
-        matches!(self, StateManagement::Shared(_))
-    }
-    
-    pub fn shared_id(&self) -> Option<&String> {
-        match self {
-            StateManagement::Shared(id) => Some(id),
-            _ => None,
-        }
-    }
-}
 
 impl Default for StateManagement {
     fn default() -> Self {
@@ -137,50 +115,8 @@ pub struct ServiceDiscovery {
     pub name: Option<String>,
 }
 
-impl ServiceConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: ServiceConfig = serde_yaml::from_str(&content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse service config: {}", e)))?;
-        Ok(config)
-    }
-    
-    pub fn from_str(content: &str) -> Result<Self> {
-        let config: ServiceConfig = serde_yaml::from_str(content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse service config: {}", e)))?;
-        Ok(config)
-    }
-}
 
-impl ModuleConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: ModuleConfig = serde_yaml::from_str(&content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse module config: {}", e)))?;
-        Ok(config)
-    }
-    
-    pub fn from_str(content: &str) -> Result<Self> {
-        let config: ModuleConfig = serde_yaml::from_str(content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse module config: {}", e)))?;
-        Ok(config)
-    }
-}
 
-impl WorkspaceConfig {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        let config: WorkspaceConfig = serde_yaml::from_str(&content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse workspace config: {}", e)))?;
-        Ok(config)
-    }
-    
-    pub fn from_str(content: &str) -> Result<Self> {
-        let config: WorkspaceConfig = serde_yaml::from_str(content)
-            .map_err(|e| crate::common::EnvieError::ConfigError(format!("Failed to parse workspace config: {}", e)))?;
-        Ok(config)
-    }
-}
 
 #[cfg(test)]
 mod tests {

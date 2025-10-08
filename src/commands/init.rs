@@ -383,9 +383,9 @@ output "example_output" {{
             String::new()
         };
 
-        let envie_entries = "\n# Envie generated files\n.envie-remote-state.tf\n.envie-variables.tf\n.terraform/\n.terraform.lock.hcl\n*.tfstate\n*.tfstate.*\n";
+        let envie_entries = "\n# Envie generated files\nenvie-remote-state.tf\nenvie-backend.tf\n.envie-variables.tf\n.terraform/\n.terraform.lock.hcl\n*.tfstate\n*.tfstate.*\nterraform.tfvars\n";
 
-        if !gitignore_content.contains(".envie-remote-state.tf") {
+        if !gitignore_content.contains("envie-remote-state.tf") {
             gitignore_content.push_str(envie_entries);
             std::fs::write(gitignore_path, gitignore_content)?;
         }

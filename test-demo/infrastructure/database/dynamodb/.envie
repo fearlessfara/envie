@@ -1,8 +1,0 @@
-name: dynamodb
-description: DynamoDB table for demo app
-unit_type: component
-state_management: dedicated
-
-depends:
-  - path: ../../compute/lambda
-    environment: ephemeral

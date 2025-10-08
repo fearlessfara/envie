@@ -1,4 +1,0 @@
-name: lambda
-description: Lambda function for demo app
-unit_type: component
-state_management: dedicated

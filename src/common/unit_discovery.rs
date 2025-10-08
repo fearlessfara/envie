@@ -79,7 +79,7 @@ impl UnitDiscovery {
             .map(|(qname, unit)| (qname.clone(), unit.config.name.clone(), unit.path.clone(), unit.level))
             .collect();
 
-        for (qualified_name, unit_name, unit_path, unit_level) in unit_data {
+        for (qualified_name, _unit_name, unit_path, unit_level) in unit_data {
             // Find parent (closest ancestor with .envie file)
             if let Some(parent) = self.find_parent(&unit_path, unit_level) {
                 // Find parent unit name
