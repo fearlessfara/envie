@@ -63,7 +63,7 @@ impl InitCommand {
 
         println!("\n✅ Envie project initialized successfully!");
         println!("\n📁 Project structure created:");
-        println!("  ├── workspace.envie          # Global project configuration");
+        println!("  ├── workspace.envie          # Global project configuration (keeping for compatibility)");
         println!("  ├── services/                # Service directory");
         println!("  │   ├── networking/          # Example networking service");
         println!("  │   ├── database/            # Example database service");
@@ -71,7 +71,7 @@ impl InitCommand {
         println!("  └── README.md                # Project documentation");
         
         println!("\n🚀 Next steps:");
-        println!("  1. Review and customize workspace.envie");
+        println!("  1. Review and customize workspace.envie and unit envie.yaml files");
         println!("  2. Add your services to the services/ directory");
         println!("  3. Run 'envie deploy --service <name> --merge-request <id>' to deploy");
 
@@ -180,7 +180,7 @@ impl InitCommand {
         std::fs::create_dir_all(service_dir.join("modules").join("subnets"))?;
         std::fs::create_dir_all(service_dir.join("modules").join("security-groups"))?;
 
-        // Create .envie file
+        // Create envie.yaml file
         let config = ServiceConfig {
             name: "networking".to_string(),
             description: "Networking infrastructure with VPC, subnets, and security groups".to_string(),
@@ -221,7 +221,7 @@ impl InitCommand {
         };
 
         let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join(".envie"), content)?;
+        std::fs::write(service_dir.join("envie.yaml"), content)?;
 
         // Create example Terraform files
         self.create_example_terraform_files(&service_dir)?;
@@ -235,7 +235,7 @@ impl InitCommand {
         std::fs::create_dir_all(service_dir.join("modules").join("dynamodb"))?;
         std::fs::create_dir_all(service_dir.join("modules").join("rds"))?;
 
-        // Create .envie file
+        // Create envie.yaml file
         let config = ServiceConfig {
             name: "database".to_string(),
             description: "Database layer with DynamoDB and RDS".to_string(),
@@ -273,7 +273,7 @@ impl InitCommand {
         };
 
         let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join(".envie"), content)?;
+        std::fs::write(service_dir.join("envie.yaml"), content)?;
 
         // Create example Terraform files
         self.create_example_terraform_files(&service_dir)?;
@@ -288,7 +288,7 @@ impl InitCommand {
         std::fs::create_dir_all(service_dir.join("modules").join("step-functions"))?;
         std::fs::create_dir_all(service_dir.join("modules").join("gateway"))?;
 
-        // Create .envie file
+        // Create envie.yaml file
         let config = ServiceConfig {
             name: "api".to_string(),
             description: "API layer with Lambda, Step Functions, and API Gateway".to_string(),
@@ -338,7 +338,7 @@ impl InitCommand {
         };
 
         let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join(".envie"), content)?;
+        std::fs::write(service_dir.join("envie.yaml"), content)?;
 
         // Create example Terraform files
         self.create_example_terraform_files(&service_dir)?;
@@ -407,13 +407,13 @@ This project is managed by [Envie](https://github.com/your-org/envie), a tool fo
 ├── workspace.envie          # Global project configuration
 ├── services/                # Service directory
 │   ├── networking/          # Networking infrastructure
-│   │   ├── .envie          # Service configuration
+│   │   ├── envie.yaml      # Unit configuration
 │   │   └── modules/        # Terraform modules
 │   ├── database/            # Database layer
-│   │   ├── .envie          # Service configuration
+│   │   ├── envie.yaml      # Unit configuration
 │   │   └── modules/        # Terraform modules
 │   └── api/                 # API layer
-│       ├── .envie          # Service configuration
+│       ├── envie.yaml      # Unit configuration
 │       └── modules/        # Terraform modules
 └── README.md                # This file
 ```
@@ -438,7 +438,7 @@ This project is managed by [Envie](https://github.com/your-org/envie), a tool fo
 ## Configuration
 
 - `workspace.envie`: Global project configuration with environment definitions
-- `services/*/.envie`: Per-service configuration with module dependencies
+- `services/*/envie.yaml`: Per-unit configuration with dependencies
 
 ## Environments
 

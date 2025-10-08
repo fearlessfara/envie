@@ -26,7 +26,7 @@ impl ListCommand {
         discovery.discover_all()?;
         
         if discovery.registry.units.is_empty() {
-            self.output_manager.print_yellow("No units found. Make sure you have .envie files in your project.");
+            self.output_manager.print_yellow("No units found. Make sure you have envie.yaml files in your project.");
             return Ok(());
         }
         

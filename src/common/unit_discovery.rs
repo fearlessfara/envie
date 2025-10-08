@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// Discovers all units in a project by recursively finding .envie files
+/// Discovers all units in a project by recursively finding envie.yaml files
 pub struct UnitDiscovery {
     pub root_path: PathBuf,
     pub registry: UnitRegistry,
@@ -21,47 +21,47 @@ impl UnitDiscovery {
     /// Discover all units in the project
     pub fn discover_all(&mut self) -> Result<()> {
         self.registry = UnitRegistry::new();
-        
-        // Find all .envie files recursively
+
+        // Find all envie.yaml files recursively
         for entry in WalkDir::new(&self.root_path)
             .into_iter()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name() == ".envie")
+            .filter(|e| e.file_name() == "envie.yaml" || e.file_name() == "envie.yml")
         {
             let path = entry.path();
             let unit = self.parse_unit_file(path)?;
             self.registry.add_unit(unit);
         }
-        
+
         // Build parent-child relationships
         self.build_hierarchy()?;
-        
+
         Ok(())
     }
     
-    /// Parse a single .envie file
+    /// Parse a single envie.yaml file
     fn parse_unit_file(&self, file_path: &Path) -> Result<DiscoveredUnit> {
         let content = fs::read_to_string(file_path)?;
         let config: UnitConfig = serde_yaml::from_str(&content)?;
-        
+
         // Calculate the level (depth from root)
         let level = self.calculate_level(file_path);
-        
+
         // Set the path relative to project root
         let relative_path = file_path.parent()
             .unwrap_or(file_path)
             .strip_prefix(&self.root_path)
             .unwrap_or(file_path.parent().unwrap_or(file_path))
             .to_path_buf();
-        
+
         let mut unit = DiscoveredUnit::new(config, relative_path.clone(), level);
-        
+
         // Set the path in the config
         unit.config.path = relative_path.to_string_lossy().to_string();
-        
+
         Ok(unit)
     }
-    
+
     /// Calculate the depth level of a unit
     fn calculate_level(&self, file_path: &Path) -> usize {
         file_path
@@ -69,7 +69,7 @@ impl UnitDiscovery {
             .unwrap_or(file_path)
             .components()
             .count()
-            .saturating_sub(2) // Subtract 2: 1 for the .envie file, 1 for the directory containing it
+            .saturating_sub(2) // Subtract 2: 1 for the envie.yaml file, 1 for the directory containing it
     }
     
     /// Build parent-child relationships between units
@@ -107,23 +107,24 @@ impl UnitDiscovery {
         if unit_level == 0 {
             return None; // Root level units have no parent
         }
-        
-        // Look for parent directories that contain .envie files
+
+        // Look for parent directories that contain envie.yaml files
         let mut current_path = unit_path.clone();
-        
+
         while let Some(parent) = current_path.parent() {
             if parent == self.root_path {
                 break; // Reached project root
             }
-            
-            let parent_envie = parent.join(".envie");
-            if parent_envie.exists() {
+
+            let parent_envie_yaml = parent.join("envie.yaml");
+            let parent_envie_yml = parent.join("envie.yml");
+            if parent_envie_yaml.exists() || parent_envie_yml.exists() {
                 return Some(parent.to_path_buf());
             }
-            
+
             current_path = parent.to_path_buf();
         }
-        
+
         None
     }
     

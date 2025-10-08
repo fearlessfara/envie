@@ -39,7 +39,7 @@ impl DeleteCommand {
 
         if discovery.registry.units.is_empty() {
             return Err(EnvieError::ValidationError(
-                "No deployable units found. Make sure you have .envie files in your project.".to_string()
+                "No deployable units found. Make sure you have envie.yaml files in your project.".to_string()
             ));
         }
 
