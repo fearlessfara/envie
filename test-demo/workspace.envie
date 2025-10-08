@@ -1,0 +1,21 @@
+version: '1.0'
+
+project:
+  name: demo-app
+  description: Demo application for testing envie
+
+environments:
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    backend:
+      type: s3
+      config:
+        bucket: "demo-app-terraform-state-20250108"
+        region: "us-east-1"
+        key_pattern: "ephemeral/{workspace}/{path}/terraform.tfstate"
+        dynamodb_table: "demo-app-terraform-locks"
+        encrypt: "true"
+  
+  stable: {}
+
+defaults: {}

@@ -1,0 +1,4 @@
+name: vpc
+description: VPC for the full demo app
+unit_type: component
+state_management: dedicated

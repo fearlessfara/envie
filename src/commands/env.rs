@@ -156,12 +156,13 @@ impl EnvCommand {
         Ok(())
     }
 
-    fn validate_merge_request_id(&self, merge_request_id: &str) -> Result<()> {
-        let re = Regex::new(r"^[0-9]+(-[0-9A-Za-z]+)?$")?;
+    fn validate_merge_request_id(&self, env_id: &str) -> Result<()> {
+        // Allow alphanumeric characters, hyphens, underscores, and dots
+        let re = Regex::new(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")?;
         
-        if !re.is_match(merge_request_id) {
+        if !re.is_match(env_id) {
             return Err(EnvieError::ValidationError(
-                "Invalid merge request ID. Please provide a valid merge request ID in the format {number}-({number})?".to_string()
+                "Invalid environment ID. Please provide a valid environment ID (alphanumeric characters, hyphens, underscores, and dots allowed)".to_string()
             ));
         }
 

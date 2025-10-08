@@ -14,17 +14,9 @@ pub enum EnvieError {
     #[error("Process execution error: {0}")]
     ProcessError(String),
 
-    #[error("JSON parsing error: {0}")]
-    JsonError(String),
-
     #[error("Validation error: {0}")]
     ValidationError(String),
 
-    #[error("Dependency resolution error: {0}")]
-    DependencyError(String),
-
-    #[error("Environment error: {0}")]
-    EnvironmentError(String),
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),

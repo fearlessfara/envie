@@ -1,5 +1,5 @@
 use crate::common::*;
-use crate::common::service_config::{ServiceConfig, WorkspaceConfig};
+use crate::common::service_config::WorkspaceConfig;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -28,15 +28,105 @@ impl ShowCommand {
             println!("🔍 Analyzing Envie project structure...");
         }
 
-        // Load workspace configuration
-        let workspace_config = self.load_workspace_config()?;
+        // Discover all units using the new flexible system
+        let mut discovery = UnitDiscovery::new(self.working_directory.clone());
+        discovery.discover_all()?;
         
-        if let Some(service_name) = &options.service {
-            // Show specific service
-            self.show_service(service_name, &options)?;
+        if let Some(unit_name) = &options.service {
+            // Show specific unit
+            self.show_unit(unit_name, &discovery, &options)?;
         } else {
-            // Show all services
-            self.show_all_services(&workspace_config, &options)?;
+            // Show all units
+            self.show_all_units(&discovery, &options)?;
+        }
+
+        Ok(())
+    }
+
+    fn show_all_units(&self, discovery: &UnitDiscovery, _options: &ShowOptions) -> Result<()> {
+        self.output_manager.print_green("📋 Envie Project Overview");
+        println!();
+
+        // Show project info if workspace.envie exists
+        if let Ok(workspace_config) = self.load_workspace_config() {
+            if let Some(project) = &workspace_config.project {
+                self.output_manager.print_blue("Project:");
+                println!("  Name: {}", project.name);
+                println!("  Description: {}", project.description);
+                println!();
+            }
+        }
+
+        // Show all discovered units grouped by type
+        self.output_manager.print_blue("Discovered Units:");
+        println!();
+        
+        // Group by unit type
+        for unit_type in [UnitType::Layer, UnitType::Application, UnitType::Service, UnitType::Component, UnitType::Module] {
+            let units = discovery.get_units_by_type(&unit_type);
+            if !units.is_empty() {
+                println!("  {:?}:", unit_type);
+                for unit in units {
+                    let indent = "  ".repeat(unit.level + 2);
+                    println!("{}📦 {} - {}", indent, unit.config.name, unit.config.description);
+                    println!("{}   Path: {}", indent, unit.path.display());
+                    println!("{}   State: {:?}", indent, unit.config.state_management);
+                    
+                    if !unit.config.depends.is_empty() {
+                        println!("{}   Dependencies:", indent);
+                        for dep in &unit.config.depends {
+                            println!("{}     - {} ({})", indent, dep.path, dep.environment);
+                        }
+                    }
+                    println!();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn show_unit(&self, unit_name: &str, discovery: &UnitDiscovery, _options: &ShowOptions) -> Result<()> {
+        // Find the unit
+        let unit = discovery.registry.get_unit(unit_name)
+            .ok_or_else(|| EnvieError::ValidationError(
+                format!("Unit '{}' not found", unit_name)
+            ))?;
+
+        self.output_manager.print_green(&format!("📦 Unit: {}", unit_name));
+        println!();
+
+        println!("  Type: {:?}", unit.config.unit_type);
+        println!("  Description: {}", unit.config.description);
+        println!("  Path: {}", unit.path.display());
+        println!("  Level: {} (depth in structure)", unit.level);
+        println!("  State Management: {:?}", unit.config.state_management);
+        println!();
+
+        if !unit.config.depends.is_empty() {
+            self.output_manager.print_blue("  Dependencies:");
+            for dep in &unit.config.depends {
+                println!("    📎 {} ({})", dep.path, dep.environment);
+            }
+            println!();
+        }
+
+        if !unit.children.is_empty() {
+            self.output_manager.print_blue("  Child Units:");
+            for child_path in &unit.children {
+                if let Some(child) = discovery.registry.get_unit_by_path(child_path) {
+                    println!("    - {}", child.config.name);
+                }
+            }
+            println!();
+        }
+
+        if let Some(parent_path) = &unit.parent {
+            if let Some(parent) = discovery.registry.get_unit_by_path(parent_path) {
+                self.output_manager.print_blue("  Parent Unit:");
+                println!("    - {}", parent.config.name);
+                println!();
+            }
         }
 
         Ok(())
@@ -53,115 +143,6 @@ impl ShowCommand {
         let content = std::fs::read_to_string(&workspace_file)?;
         let config: WorkspaceConfig = serde_yaml::from_str(&content)?;
         Ok(config)
-    }
-
-    fn show_all_services(&self, workspace_config: &WorkspaceConfig, options: &ShowOptions) -> Result<()> {
-        self.output_manager.print_green("📋 Envie Project Overview");
-        println!();
-
-        // Show project info
-        if let Some(project) = &workspace_config.project {
-            self.output_manager.print_blue("Project:");
-            println!("  Name: {}", project.name);
-            println!("  Description: {}", project.description);
-            println!();
-        }
-
-        // Show services
-        self.output_manager.print_blue("Services:");
-        for service_discovery in &workspace_config.services {
-            let service_name = service_discovery.name.as_ref()
-                .cloned()
-                .unwrap_or_else(|| service_discovery.path.split('/').last().unwrap_or("unknown").to_string());
-            
-            println!("  📦 {}", service_name);
-            
-            // Load and show service details
-            if let Ok(service_config) = self.load_service_config(&service_discovery.path) {
-                if options.modules || (!options.dependencies && !options.modules) {
-                    self.show_service_modules(&service_config, "    ");
-                }
-                if options.dependencies || (!options.dependencies && !options.modules) {
-                    self.show_service_dependencies(&service_config, "    ");
-                }
-            }
-            println!();
-        }
-
-        Ok(())
-    }
-
-    fn show_service(&self, service_name: &str, options: &ShowOptions) -> Result<()> {
-        // Find the service in workspace config
-        let workspace_config = self.load_workspace_config()?;
-        let service_discovery = workspace_config.services
-            .iter()
-            .find(|s| s.name.as_ref().map(|n| n == service_name).unwrap_or(false) ||
-                     s.path.split('/').last().unwrap_or("") == service_name)
-            .ok_or_else(|| EnvieError::ValidationError(
-                format!("Service '{}' not found", service_name)
-            ))?;
-
-        self.output_manager.print_green(&format!("📦 Service: {}", service_name));
-        println!();
-
-        // Load service configuration
-        let service_config = self.load_service_config(&service_discovery.path)?;
-        
-        println!("  Description: {}", service_config.description);
-        println!();
-
-        if options.modules || (!options.dependencies && !options.modules) {
-            self.show_service_modules(&service_config, "  ");
-        }
-        
-        if options.dependencies || (!options.dependencies && !options.modules) {
-            self.show_service_dependencies(&service_config, "  ");
-        }
-
-        Ok(())
-    }
-
-    fn load_service_config(&self, service_path: &str) -> Result<ServiceConfig> {
-        let service_dir = self.working_directory.join(service_path);
-        let envie_file = service_dir.join(".envie");
-        
-        if !envie_file.exists() {
-            return Err(EnvieError::ValidationError(
-                format!("No .envie file found in {}", service_path)
-            ));
-        }
-
-        let content = std::fs::read_to_string(&envie_file)?;
-        let config: ServiceConfig = serde_yaml::from_str(&content)?;
-        Ok(config)
-    }
-
-    fn show_service_modules(&self, service_config: &ServiceConfig, indent: &str) {
-        self.output_manager.print_blue(&format!("{}Modules:", indent));
-        for module in &service_config.modules {
-            println!("{}  🔧 {}", indent, module.name);
-            println!("{}     Description: {}", indent, module.description);
-            println!("{}     Path: {}", indent, module.path);
-            
-            if !module.depends.is_empty() {
-                println!("{}     Dependencies:", indent);
-                for dep in &module.depends {
-                    println!("{}       - {} ({})", indent, dep.path, dep.environment);
-                }
-            }
-            println!();
-        }
-    }
-
-    fn show_service_dependencies(&self, service_config: &ServiceConfig, indent: &str) {
-        if !service_config.depends.is_empty() {
-            self.output_manager.print_blue(&format!("{}Service Dependencies:", indent));
-            for dep in &service_config.depends {
-                println!("{}  📎 {}", indent, dep);
-            }
-            println!();
-        }
     }
 }
 

@@ -1,0 +1,4 @@
+name: s3
+description: S3 storage for the full demo app
+unit_type: component
+state_management: dedicated

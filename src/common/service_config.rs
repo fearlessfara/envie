@@ -29,6 +29,75 @@ pub struct ModuleConfig {
     
     #[serde(default)]
     pub depends: Vec<DependencyReference>,
+    
+    #[serde(default)]
+    pub state_management: StateManagement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "StateManagementString")]
+pub enum StateManagement {
+    /// Module has its own dedicated state file
+    Dedicated,
+    /// Module is managed as part of the service-level state
+    Service,
+    /// Module is managed as part of a shared state with other modules
+    Shared(String), // The shared state identifier
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum StateManagementString {
+    String(String),
+    Object { shared_state_id: String },
+}
+
+impl From<StateManagementString> for StateManagement {
+    fn from(s: StateManagementString) -> Self {
+        match s {
+            StateManagementString::String(s) => {
+                if s == "dedicated" {
+                    StateManagement::Dedicated
+                } else if s == "service" {
+                    StateManagement::Service
+                } else if s.starts_with("shared:") {
+                    StateManagement::Shared(s.strip_prefix("shared:").unwrap().to_string())
+                } else {
+                    StateManagement::Service // Default fallback
+                }
+            }
+            StateManagementString::Object { shared_state_id } => {
+                StateManagement::Shared(shared_state_id)
+            }
+        }
+    }
+}
+
+impl StateManagement {
+    pub fn is_dedicated(&self) -> bool {
+        matches!(self, StateManagement::Dedicated)
+    }
+    
+    pub fn is_service(&self) -> bool {
+        matches!(self, StateManagement::Service)
+    }
+    
+    pub fn is_shared(&self) -> bool {
+        matches!(self, StateManagement::Shared(_))
+    }
+    
+    pub fn shared_id(&self) -> Option<&String> {
+        match self {
+            StateManagement::Shared(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+impl Default for StateManagement {
+    fn default() -> Self {
+        StateManagement::Service
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,6 +118,9 @@ pub struct WorkspaceConfig {
     
     #[serde(default)]
     pub defaults: HashMap<String, serde_json::Value>,
+    
+    #[serde(default)]
+    pub environments: Option<crate::common::environment::EnvironmentConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

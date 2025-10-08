@@ -143,6 +143,7 @@ impl InitCommand {
                 },
             ],
             defaults: HashMap::new(),
+            environments: None,
         })
     }
 
@@ -189,6 +190,7 @@ impl InitCommand {
                     description: "VPC configuration".to_string(),
                     path: "modules/vpc".to_string(),
                     depends: vec![],
+                    state_management: crate::common::service_config::StateManagement::Service,
                 },
                 ModuleConfig {
                     name: "subnets".to_string(),
@@ -200,6 +202,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Service,
                 },
                 ModuleConfig {
                     name: "security-groups".to_string(),
@@ -211,6 +214,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Service,
                 },
             ],
             depends: vec![],
@@ -246,6 +250,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Dedicated,
                 },
                 ModuleConfig {
                     name: "rds".to_string(),
@@ -261,6 +266,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Dedicated,
                 },
             ],
             depends: vec!["../networking".to_string()],
@@ -301,6 +307,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Dedicated,
                 },
                 ModuleConfig {
                     name: "step-functions".to_string(),
@@ -312,6 +319,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Service,
                 },
                 ModuleConfig {
                     name: "gateway".to_string(),
@@ -323,6 +331,7 @@ impl InitCommand {
                             environment: "ephemeral".to_string(),
                         },
                     ],
+                    state_management: crate::common::service_config::StateManagement::Service,
                 },
             ],
             depends: vec!["../database".to_string(), "../networking".to_string()],

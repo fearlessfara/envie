@@ -1,0 +1,8 @@
+
+# Envie generated files
+.envie-remote-state.tf
+.envie-variables.tf
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*

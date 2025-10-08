@@ -47,7 +47,10 @@ impl TerraformManager {
         let output = self.run_command_capture("workspace", &["list"], false)?;
         let workspaces: Vec<String> = output
             .lines()
-            .map(|line| line.trim().to_string())
+            .map(|line| {
+                // Remove the * prefix and trim whitespace
+                line.trim().trim_start_matches("* ").to_string()
+            })
             .filter(|line| !line.is_empty())
             .collect();
         Ok(workspaces)

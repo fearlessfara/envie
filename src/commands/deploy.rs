@@ -5,21 +5,21 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
-pub struct DeployV2Options {
-    pub service_name: Option<String>,
-    pub merge_request: String,
+pub struct DeployOptions {
+    pub unit_name: Option<String>,
+    pub env_id: String,
     pub environment_overrides: HashMap<String, String>,
     pub dry_run: bool,
     pub no_prompt: bool,
     pub verbose: bool,
 }
 
-pub struct DeployV2Command {
+pub struct DeployCommand {
     working_directory: PathBuf,
     output_manager: OutputManager,
 }
 
-impl DeployV2Command {
+impl DeployCommand {
     pub fn new(working_directory: PathBuf) -> Self {
         Self {
             working_directory,
@@ -27,239 +27,407 @@ impl DeployV2Command {
         }
     }
     
-    pub async fn execute(&self, options: DeployV2Options) -> Result<()> {
-        // Environment overrides are already parsed by the CLI handler
-        let environment_overrides = &options.environment_overrides;
-        // Discover services from current directory
-        let registry = ServiceRegistry::discover_from_path(&self.working_directory)?;
+    pub async fn execute(&self, options: DeployOptions) -> Result<()> {
+        // Find the project root (where workspace.envie is)
+        let project_root = self.find_project_root()?;
         
-        if registry.services.is_empty() {
+        if options.verbose {
+            println!("🚀 Starting deployment with flexible unit discovery...");
+            println!("📂 Project root: {}", project_root.display());
+            println!("📂 Current directory: {}", std::env::current_dir()?.display());
+        }
+
+        // Discover all units from the project root
+        let mut discovery = UnitDiscovery::new(project_root.clone());
+        discovery.discover_all()?;
+        
+        if discovery.registry.units.is_empty() {
             return Err(EnvieError::ValidationError(
-                "No services found. Make sure you're in a directory with .envie files or run from the project root.".to_string()
+                "No deployable units found. Make sure you have .envie files in your project.".to_string()
             ));
         }
         
-        // Determine which service(s) to deploy
-        let services_to_deploy = if let Some(service_name) = options.service_name {
-            if let Some(service) = registry.services.get(&service_name) {
-                vec![service.clone()]
-            } else {
-                return Err(EnvieError::ValidationError(
-                    format!("Service '{}' not found", service_name)
-                ));
-            }
+        // Determine which unit(s) to deploy
+        let units_to_deploy = if let Some(ref unit_name) = options.unit_name {
+            // Deploy specific unit(s) with disambiguation
+            // Supports single units, ambiguous names, or path-based groups
+            let matches = discovery.registry.resolve_unit(unit_name);
+            resolve_units_with_prompt(matches, unit_name, options.no_prompt)?
         } else {
-            // Deploy the service in the current directory
-            if let Some(service) = registry.find_service_by_path(&self.working_directory) {
-                vec![service.clone()]
+            // Check if we're in a unit directory first
+            let current_dir = std::env::current_dir()?;
+            let mut search_path = current_dir.clone();
+            let mut found_unit = None;
+            
+            // Try to find a unit at or above the current directory
+            loop {
+                if let Ok(relative_path) = search_path.strip_prefix(&project_root) {
+                    let relative_pathbuf = relative_path.to_path_buf();
+                    if options.verbose {
+                        println!("🔍 Searching for unit at path: {:?}", relative_pathbuf);
+                    }
+                    if let Some(unit) = discovery.registry.get_unit_by_path(&relative_pathbuf) {
+                        if options.verbose {
+                            println!("✅ Found unit: {} at path: {}", unit.config.name, unit.path.display());
+                        }
+                        found_unit = Some(unit);
+                        break;
+                    }
+                }
+                
+                // Move up one directory
+                if let Some(parent) = search_path.parent() {
+                    search_path = parent.to_path_buf();
+                } else {
+                    break;
+                }
+            }
+            
+            if let Some(unit) = found_unit {
+                // Deploy the unit in the current directory
+                vec![unit]
             } else {
-                return Err(EnvieError::ValidationError(
-                    "No service found in current directory. Specify a service name or run from a service directory.".to_string()
-                ));
+                // Deploy all units in dependency order
+                if options.verbose {
+                    println!("🚀 No specific unit found, deploying all units in dependency order...");
+                    println!("🔍 All units: {:?}", discovery.registry.get_all_units().iter().map(|u| format!("{} (level: {})", u.config.name, u.level)).collect::<Vec<_>>());
+                    println!("🔍 Root units: {:?}", discovery.get_root_units().iter().map(|u| format!("{} (level: {})", u.config.name, u.level)).collect::<Vec<_>>());
+                }
+                let units = discovery.get_units_in_dependency_order()?;
+                if options.verbose {
+                    println!("🔍 Units in dependency order: {:?}", units.iter().map(|u| &u.config.name).collect::<Vec<_>>());
+                }
+                units
             }
         };
         
         // Resolve workspace name
         let project_name = self.get_project_name()?;
-        let workspace = format!("{}-{}", project_name, options.merge_request);
+        let workspace = format!("{}-{}", project_name, options.env_id);
+        
+        if options.verbose {
+            println!("📦 Deploying {} unit(s)", units_to_deploy.len());
+            println!("🌍 Workspace: {}", workspace);
+        }
         
         // Load environment configuration
         let environment_config = self.load_environment_config()?;
         
+        // Check and setup backend infrastructure if needed
+        self.ensure_backend_exists(&environment_config, options.no_prompt, options.verbose).await?;
+        
         // Create environment resolver
         let environment_resolver = EnvironmentResolver::new(
             workspace.clone(),
-            project_name,
+            project_name.clone(),
             environment_config,
         ).with_available_workspaces(self.get_available_workspaces()?);
         
-        // Deploy each service
-        for service in services_to_deploy {
-            self.deploy_service(&service, &workspace, &environment_resolver, &environment_overrides, options.dry_run).await?;
-        }
+        // Resolve deployment order (dependencies first)
+        let deployment_order = if units_to_deploy.len() == 1 {
+            // Single unit - resolve its dependencies
+            discovery.resolve_deployment_order(&units_to_deploy[0].config.name)?
+        } else {
+            // Multiple units - sort them topologically
+            // Get all units in dependency order, then filter to only those requested
+            let all_units_ordered = discovery.get_units_in_dependency_order()?;
+            let requested_qualified_names: std::collections::HashSet<_> =
+                units_to_deploy.iter().map(|u| &u.qualified_name).collect();
+
+            all_units_ordered
+                .into_iter()
+                .filter(|unit| requested_qualified_names.contains(&unit.qualified_name))
+                .collect()
+        };
         
-        Ok(())
-    }
-    
-    async fn deploy_service(
-        &self,
-        service: &DiscoveredService,
-        workspace: &str,
-        environment_resolver: &EnvironmentResolver,
-        environment_overrides: &HashMap<String, String>,
-        dry_run: bool,
-    ) -> Result<()> {
-        self.output_manager.print_green(&format!("Deploying service: {}", service.config.name));
-        
-        // Resolve dependencies
-        let registry = ServiceRegistry::discover_from_path(&self.working_directory)?;
-        let deployment_order = registry.resolve_dependencies(&service.config.name)?;
-        
-        if dry_run {
-            self.print_deployment_plan(&deployment_order, environment_resolver)?;
+        if options.dry_run {
+            self.print_deployment_plan(&deployment_order, &environment_resolver)?;
             return Ok(());
         }
         
-        // Deploy modules in dependency order
-        for module in &service.modules {
-            self.deploy_module(module, workspace, environment_resolver, environment_overrides, &service.config.name).await?;
+        // Deploy each unit in order
+        self.output_manager.print_green(&format!("\n🚀 Deploying {} unit(s)...\n", deployment_order.len()));
+        
+        for (index, unit) in deployment_order.iter().enumerate() {
+            self.output_manager.print_blue(&format!("[{}/{}] Deploying: {}", 
+                index + 1, 
+                deployment_order.len(), 
+                unit.config.name
+            ));
+            
+            self.deploy_unit(
+                unit,
+                &project_root,
+                &workspace,
+                &environment_resolver,
+                &options.environment_overrides,
+                &options,
+            ).await?;
         }
+        
+        self.output_manager.print_green("\n✅ Deployment complete!");
         
         Ok(())
     }
     
-    async fn deploy_module(
+    async fn deploy_unit(
         &self,
-        module: &DiscoveredModule,
+        unit: &DiscoveredUnit,
+        project_root: &PathBuf,
         workspace: &str,
         environment_resolver: &EnvironmentResolver,
         environment_overrides: &HashMap<String, String>,
-        service_name: &str,
+        options: &DeployOptions,
     ) -> Result<()> {
-        self.output_manager.print_green(&format!("  Deploying module: {}", module.config.name));
+        println!("  📍 Path: {}", unit.path.display());
+        println!("  🏷️  Type: {:?}", unit.config.unit_type);
+        println!("  💾 State: {:?}", unit.config.state_management);
+        
+        // Get the full path to the unit
+        let unit_path = project_root.join(&unit.path);
+        
+        // Convert dependencies to the format expected by TerraformGenerator
+        let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.depends.iter().map(|dep| {
+            crate::common::service_config::DependencyReference {
+                path: dep.path.clone(),
+                environment: dep.environment.clone(),
+            }
+        }).collect();
         
         // Generate Terraform files
         let generator = TerraformGenerator::new();
+        let project_name = self.get_project_name()?;
         generator.write_generated_files(
-            &module.path,
-            &module.config.depends,
-            &module.config,
+            &unit_path,
+            &dependencies,
+            &self.convert_unit_to_module_config(unit),
             environment_resolver,
             environment_overrides,
-            service_name,
-            &module.config.name,
+            &unit.config.name,
+            &unit.config.name,
+            &project_name,
+            &options.env_id,
         )?;
         
         // Initialize and apply Terraform
-        let terraform_manager = TerraformManager::new(&module.path);
+        let terraform_manager = TerraformManager::new(&unit_path);
+        
+        println!("  🔧 Running terraform init...");
         terraform_manager.init()?;
         
         // Create or select workspace
-        if terraform_manager.workspace_list()?.iter().any(|w| w == workspace) {
+        let workspaces = terraform_manager.workspace_list()?;
+        if workspaces.iter().any(|w| w == workspace) {
             terraform_manager.workspace_select(workspace)?;
         } else {
             terraform_manager.workspace_new(workspace)?;
         }
         
         // Apply Terraform
+        println!("  ⚡ Running terraform apply...");
         terraform_manager.apply(&[])?;
         
-        self.output_manager.print_green(&format!("  ✓ Module {} deployed successfully", module.config.name));
+        println!("  ✅ Unit deployed successfully\n");
         
         Ok(())
     }
     
     fn print_deployment_plan(
         &self,
-        deployment_order: &[String],
+        deployment_order: &[&DiscoveredUnit],
         _environment_resolver: &EnvironmentResolver,
     ) -> Result<()> {
-        self.output_manager.print_yellow("Deployment Plan:");
+        self.output_manager.print_green("📋 Deployment Plan (Dry Run)\n");
         
-        for (i, service_name) in deployment_order.iter().enumerate() {
-            self.output_manager.print_yellow(&format!("  {}. {}", i + 1, service_name));
+        println!("Deployment Order:");
+        for (index, unit) in deployment_order.iter().enumerate() {
+            println!("  {}. {} ({:?})", 
+                index + 1, 
+                unit.config.name, 
+                unit.config.unit_type
+            );
+            println!("     Path: {}", unit.path.display());
+            println!("     State: {:?}", unit.config.state_management);
+            
+            if !unit.config.depends.is_empty() {
+                println!("     Dependencies:");
+                for dep in &unit.config.depends {
+                    println!("       - {}", dep.path);
+                }
+            }
+            println!();
         }
         
-        self.output_manager.print_yellow("\nRemote State Dependencies:");
+        println!("📊 Summary:");
+        println!("  Total units to deploy: {}", deployment_order.len());
         
-        // This would need to be implemented to show what remote states will be referenced
-        // For now, just show a placeholder
-        self.output_manager.print_yellow("  (Remote state dependencies will be shown here)");
+        // Count by type
+        let mut type_counts: HashMap<String, usize> = HashMap::new();
+        for unit in deployment_order {
+            let type_name = format!("{:?}", unit.config.unit_type);
+            *type_counts.entry(type_name).or_insert(0) += 1;
+        }
+        
+        for (unit_type, count) in type_counts {
+            println!("  {}: {}", unit_type, count);
+        }
         
         Ok(())
     }
     
-    fn load_environment_config(&self) -> Result<EnvironmentConfig> {
-        // Try to load workspace.envie first
-        let workspace_envie = self.working_directory.join("workspace.envie");
-        if workspace_envie.exists() {
-            let workspace_config = WorkspaceConfig::from_file(workspace_envie)?;
-            return Ok(EnvironmentConfig {
-                project: workspace_config.project,
-                ephemeral: EphemeralConfig {
-                    naming_pattern: "{project}-{id}".to_string(),
-                    backend: EnvironmentBackendConfig {
-                        backend_type: "s3".to_string(),
-                        config: {
-                            let mut config = std::collections::HashMap::new();
-                            config.insert("bucket".to_string(), "terraform-state-ephemeral".to_string());
-                            config.insert("region".to_string(), "eu-west-1".to_string());
-                            config
-                        },
-                    },
-                },
-                stable: std::collections::HashMap::new(),
-            });
+    fn convert_unit_to_module_config(&self, unit: &DiscoveredUnit) -> ModuleConfig {
+        // Convert UnitConfig to ModuleConfig for backward compatibility with TerraformGenerator
+        ModuleConfig {
+            name: unit.config.name.clone(),
+            description: unit.config.description.clone(),
+            path: unit.path.to_string_lossy().to_string(),
+            depends: unit.config.depends.iter().map(|dep| {
+                crate::common::service_config::DependencyReference {
+                    path: dep.path.clone(),
+                    environment: dep.environment.clone(),
+                }
+            }).collect(),
+            state_management: self.convert_state_management(&unit.config.state_management),
         }
-        
-        // Fallback to default configuration
-        Ok(EnvironmentConfig {
-            project: None,
-            ephemeral: EphemeralConfig {
-                naming_pattern: "{project}-{id}".to_string(),
-                backend: EnvironmentBackendConfig {
-                    backend_type: "s3".to_string(),
-                    config: {
-                        let mut config = std::collections::HashMap::new();
-                        config.insert("bucket".to_string(), "terraform-state-ephemeral".to_string());
-                        config.insert("region".to_string(), "eu-west-1".to_string());
-                        config
-                    },
-                },
-            },
-            stable: std::collections::HashMap::new(),
-        })
     }
     
-    fn get_available_workspaces(&self) -> Result<Vec<String>> {
-        // This would typically query Terraform workspaces or S3 buckets
-        // For now, return a placeholder
-        Ok(vec!["myapp-123".to_string(), "myapp-456".to_string()])
+    fn convert_state_management(&self, sm: &crate::common::unit_config::StateManagement) -> crate::common::service_config::StateManagement {
+        use crate::common::unit_config::StateManagement as UnitSM;
+        use crate::common::service_config::StateManagement as ServiceSM;
+        
+        match sm {
+            UnitSM::Dedicated => ServiceSM::Dedicated,
+            UnitSM::Parent => ServiceSM::Service, // Map parent to service for now
+            UnitSM::Shared(id) => ServiceSM::Shared(id.clone()),
+            UnitSM::Group(id) => ServiceSM::Shared(id.clone()), // Map group to shared
+        }
     }
     
     fn get_project_name(&self) -> Result<String> {
-        // Try to load from workspace config first
-        let workspace_envie = self.working_directory.join("workspace.envie");
-        if workspace_envie.exists() {
-            if let Ok(config) = EnvironmentConfig::from_file(workspace_envie) {
-                if let Some(project) = &config.project {
-                    return Ok(project.name.clone());
-                }
-            }
+        let workspace_file = self.working_directory.join("workspace.envie");
+        if !workspace_file.exists() {
+            return Ok("envie-project".to_string());
         }
+
+        let content = std::fs::read_to_string(&workspace_file)?;
+        let config: WorkspaceConfig = serde_yaml::from_str(&content)?;
         
-        // Fallback to directory name
-        std::env::current_dir()?
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| EnvieError::ValidationError("Could not determine project name".to_string()))?
-            .to_string()
-            .pipe(Ok)
+        Ok(config.project.as_ref()
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "envie-project".to_string()))
     }
     
-}
+    fn load_environment_config(&self) -> Result<EnvironmentConfig> {
+        let workspace_file = self.working_directory.join("workspace.envie");
+        if !workspace_file.exists() {
+            // Return default config
+            return Ok(EnvironmentConfig {
+                project: None,
+                ephemeral: EphemeralConfig {
+                    naming_pattern: "{project}-{id}".to_string(),
+                    backend: EnvironmentBackendConfig {
+                        backend_type: "local".to_string(),
+                        config: HashMap::new(),
+                    },
+                },
+                stable: HashMap::new(),
+            });
+        }
 
-// Helper trait for method chaining
-trait Pipe<T> {
-    fn pipe<F, U>(self, f: F) -> U where F: FnOnce(T) -> U;
-}
-
-impl<T> Pipe<T> for T {
-    fn pipe<F, U>(self, f: F) -> U where F: FnOnce(T) -> U {
-        f(self)
+        let content = std::fs::read_to_string(&workspace_file)?;
+        let config: WorkspaceConfig = serde_yaml::from_str(&content)?;
+        
+        // Use environments from workspace config if available
+        if let Some(env_config) = config.environments {
+            Ok(env_config)
+        } else {
+            // Fallback to default
+            Ok(EnvironmentConfig {
+                project: config.project.clone(),
+                ephemeral: EphemeralConfig {
+                    naming_pattern: "{project}-{id}".to_string(),
+                    backend: EnvironmentBackendConfig {
+                        backend_type: "local".to_string(),
+                        config: HashMap::new(),
+                    },
+                },
+                stable: HashMap::new(),
+            })
+        }
+    }
+    
+    fn get_available_workspaces(&self) -> Result<Vec<String>> {
+        // For now, return empty list
+        // In a real implementation, this would query Terraform or the state backend
+        Ok(Vec::new())
+    }
+    
+    /// Find the project root by searching up for workspace.envie
+    fn find_project_root(&self) -> Result<PathBuf> {
+        let mut current = self.working_directory.clone();
+        
+        loop {
+            let workspace_file = current.join("workspace.envie");
+            if workspace_file.exists() {
+                return Ok(current);
+            }
+            
+            // Move up one directory
+            if let Some(parent) = current.parent() {
+                current = parent.to_path_buf();
+            } else {
+                // No workspace.envie found, use working directory as fallback
+                return Ok(self.working_directory.clone());
+            }
+        }
+    }
+    
+    /// Ensure backend infrastructure (S3 bucket + DynamoDB table) exists
+    async fn ensure_backend_exists(
+        &self,
+        environment_config: &EnvironmentConfig,
+        no_prompt: bool,
+        verbose: bool,
+    ) -> Result<()> {
+        // Get backend config from ephemeral environment
+        let backend = &environment_config.ephemeral.backend;
+        
+        // Only handle S3 backend for now
+        if backend.backend_type != "s3" {
+            if verbose {
+                println!("⚠️  Skipping backend check for non-S3 backend type: {}", backend.backend_type);
+            }
+            return Ok(());
+        }
+        
+        // Extract required values
+        let bucket_name = backend.config.get("bucket")
+            .ok_or_else(|| EnvieError::ValidationError("S3 bucket name not found in backend config".to_string()))?
+            .to_string();
+        
+        let dynamodb_table = backend.config.get("dynamodb_table")
+            .ok_or_else(|| EnvieError::ValidationError("DynamoDB table name not found in backend config".to_string()))?
+            .to_string();
+        
+        let region = backend.config.get("region")
+            .ok_or_else(|| EnvieError::ValidationError("AWS region not found in backend config".to_string()))?
+            .to_string();
+        
+        // Check if backend infrastructure exists
+        let bootstrap = BackendBootstrap::new(bucket_name, dynamodb_table, region);
+        let status = bootstrap.check_exists()?;
+        
+        if status.is_ready() {
+            if verbose {
+                println!("✅ Backend infrastructure already exists");
+            }
+            return Ok(());
+        }
+        
+        // Backend infrastructure doesn't exist - create it
+        bootstrap.create(no_prompt)?;
+        
+        Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-    use std::fs;
-
-    #[test]
-    fn test_deploy_command_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let command = DeployV2Command::new(temp_dir.path().to_path_buf());
-        assert_eq!(command.working_directory, temp_dir.path());
-    }
-}

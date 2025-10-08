@@ -34,40 +34,60 @@ impl CommandHandler {
                 init_command.execute(options).await
             }
             Commands::Deploy {
-                service,
-                merge_request,
+                unit,
+                env,
                 environment,
                 dry_run,
-                no_prompt: _no_prompt,
+                no_prompt,
                 verbose,
             } => {
                 let environments = self.parse_environments(environment)?;
                 
-                let options = DeployV2Options {
-                    service_name: service,
-                    merge_request,
+                let options = DeployOptions {
+                    unit_name: unit,
+                    env_id: env,
                     environment_overrides: environments,
                     dry_run,
-                    no_prompt: false,
+                    no_prompt,
                     verbose,
                 };
 
-                let deployer = DeployV2Command::new(self.working_directory.clone());
+                let deployer = DeployCommand::new(self.working_directory.clone());
                 deployer.execute(options).await
             }
             Commands::Destroy {
-                merge_request,
+                unit,
+                env,
                 dry_run,
                 verbose,
             } => {
                 let options = DestroyOptions {
-                    merge_request,
+                    unit_name: unit,
+                    env_id: env,
                     dry_run,
                     verbose,
                 };
 
                 let destroyer = DestroyCommand::new(self.working_directory.clone());
                 destroyer.execute(options).await
+            }
+            Commands::Delete {
+                unit,
+                env,
+                dry_run,
+                no_prompt,
+                verbose,
+            } => {
+                let options = DeleteOptions {
+                    unit_name: unit,
+                    env_id: env,
+                    dry_run,
+                    no_prompt,
+                    verbose,
+                };
+
+                let deleter = DeleteCommand::new(self.working_directory.clone());
+                deleter.execute(options).await
             }
             Commands::Env { command } => {
                 self.handle_env_command(command).await
@@ -132,11 +152,11 @@ impl CommandHandler {
     async fn handle_env_command(&self, command: EnvCommands) -> Result<()> {
         match command {
             EnvCommands::Start {
-                merge_request_id,
+                env_id,
                 quiet,
             } => {
                 let options = EnvOptions {
-                    merge_request_id,
+                    merge_request_id: env_id,
                     quiet,
                 };
 
@@ -144,11 +164,11 @@ impl CommandHandler {
                 env_cmd.start(options).await
             }
             EnvCommands::Destroy {
-                merge_request_id,
+                env_id,
                 quiet,
             } => {
                 let options = EnvOptions {
-                    merge_request_id: merge_request_id.unwrap_or_default(),
+                    merge_request_id: env_id.unwrap_or_default(),
                     quiet,
                 };
 
@@ -162,6 +182,10 @@ impl CommandHandler {
             EnvCommands::Current => {
                 let env_cmd = EnvCommand::new(self.working_directory.clone());
                 env_cmd.current()
+            }
+            EnvCommands::TestDiscovery => {
+                let test_cmd = TestDiscoveryCommand::new(self.working_directory.clone());
+                test_cmd.execute()
             }
         }
     }

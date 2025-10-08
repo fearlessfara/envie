@@ -30,18 +30,17 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Deploy a service with dependency management and Terraform orchestration
+    /// Deploy a unit with dependency management and Terraform orchestration
     Deploy {
-        /// The name of the service to be deployed (optional - will auto-discover from current directory)
-        #[arg(short = 'S', long)]
-        service: Option<String>,
+        /// The name of the unit to be deployed (optional - will auto-discover from current directory)
+        #[arg(short = 'U', long)]
+        unit: Option<String>,
         
         /// The ID of the environment to deploy (e.g., MR number, feature branch, etc.)
         #[arg(long)]
-        merge_request: String,
+        env: String,
         
-        /// Override environment for specific dependencies (format: service:environment)
-        /// Example: -E database:stable.sandbox -E networking:ephemeral.456
+        /// Override environment for specific dependencies (format: unit:environment)
         #[arg(short = 'E', long, action = clap::ArgAction::Append)]
         environment: Vec<String>,
         
@@ -57,16 +56,42 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Destroy the environment for a specific service or component
+    /// Destroy the environment for a specific unit
     Destroy {
-        /// The ID of the merge request to base the destruction on
+        /// The name of the unit to destroy (optional - will auto-discover from current directory)
+        #[arg(short = 'U', long)]
+        unit: Option<String>,
+
+        /// The ID of the environment to destroy
         #[arg(long)]
-        merge_request: Option<String>,
-        
+        env: Option<String>,
+
         /// Simulate the destruction process without making changes
         #[arg(short = 'D', long)]
         dry_run: bool,
-        
+
+        /// Print detailed output during execution
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Completely delete an environment including state management infrastructure
+    Delete {
+        /// The name of the unit to delete (optional - deletes all units if not specified)
+        #[arg(short = 'U', long)]
+        unit: Option<String>,
+
+        /// The ID of the environment to delete
+        #[arg(long)]
+        env: String,
+
+        /// Simulate the deletion process without making changes
+        #[arg(short = 'D', long)]
+        dry_run: bool,
+
+        /// Don't prompt for confirmation
+        #[arg(long)]
+        no_prompt: bool,
+
         /// Print detailed output during execution
         #[arg(long)]
         verbose: bool,
@@ -136,8 +161,8 @@ pub enum Commands {
 pub enum EnvCommands {
     /// Start a new ephemeral dev environment
     Start {
-        /// The ID of the merge request
-        merge_request_id: String,
+        /// The ID of the environment
+        env_id: String,
         
         /// Run commands silently without displaying output
         #[arg(long)]
@@ -145,8 +170,8 @@ pub enum EnvCommands {
     },
     /// Destroy the specified or current active development environment
     Destroy {
-        /// The ID of the merge request (optional)
-        merge_request_id: Option<String>,
+        /// The ID of the environment (optional)
+        env_id: Option<String>,
         
         /// Run commands silently without displaying output
         #[arg(long)]
@@ -156,4 +181,6 @@ pub enum EnvCommands {
     List,
     /// Display the current active development environment
     Current,
+    /// Test the flexible unit discovery system
+    TestDiscovery,
 }
