@@ -29,6 +29,15 @@ pub enum EnvieError {
 
     #[error("Regex error: {0}")]
     RegexError(#[from] regex::Error),
+
+    #[error("Terraform crate error: {0}")]
+    TerraformCrateError(String),
+}
+
+impl From<terraform::Error> for EnvieError {
+    fn from(err: terraform::Error) -> Self {
+        EnvieError::TerraformCrateError(format!("{:?}", err))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, EnvieError>;

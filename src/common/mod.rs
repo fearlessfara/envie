@@ -1,6 +1,7 @@
 pub mod backend_bootstrap;
 pub mod error;
 pub mod terraform;
+pub mod envie_terraform_manager;
 pub mod output;
 pub mod service_config;
 pub mod terraform_generator;
@@ -13,6 +14,7 @@ pub mod disambiguation;
 pub use backend_bootstrap::*;
 pub use error::*;
 pub use terraform::*;
+pub use envie_terraform_manager::*;
 pub use output::*;
 pub use service_config::*;
 pub use terraform_generator::*;

@@ -10,6 +10,10 @@ license = "MIT"
 name = "envie"
 path = "src/main.rs"
 
+[[example]]
+name = "terraform_manager_demo"
+path = "examples/terraform_manager_demo.rs"
+
 
 [dependencies]
 # CLI and argument parsing
@@ -61,6 +65,9 @@ config = "0.14"
 
 # UUID generation
 uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Terraform integration
+terraform = "0.1"
 
 
 [dev-dependencies]
