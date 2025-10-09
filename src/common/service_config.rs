@@ -10,9 +10,9 @@ pub struct ServiceConfig {
     
     #[serde(default)]
     pub modules: Vec<ModuleConfig>,
-    
+
     #[serde(default)]
-    pub depends: Vec<String>,
+    pub dependencies: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct ModuleConfig {
     pub path: String,
     
     #[serde(default)]
-    pub depends: Vec<DependencyReference>,
+    pub dependencies: Vec<DependencyReference>,
     
     #[serde(default)]
     pub state_management: StateManagement,
@@ -35,11 +35,11 @@ pub struct ModuleConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "StateManagementString")]
 pub enum StateManagement {
-    /// Module has its own dedicated state file
+    /// Unit has its own dedicated state file
     Dedicated,
-    /// Module is managed as part of the service-level state
+    /// Unit is managed as part of the parent unit's state
     Service,
-    /// Module is managed as part of a shared state with other modules
+    /// Unit is managed as part of a shared state with other units
     Shared(String), // The shared state identifier
 }
 
@@ -131,22 +131,22 @@ description: API Gateway and Lambda functions
 modules:
   - name: lambda
     path: modules/lambda
-    depends: []
+    dependencies: []
     remote_states:
       - name: db
         source: ../database/modules/dynamodb
         workspace: sandbox
         outputs: [table_name, table_arn]
-  
+
   - name: gateway
     path: modules/gateway
-    depends: [lambda]
+    dependencies: [lambda]
     remote_states:
       - name: lambda
         source: ./lambda
         outputs: [function_name, function_arn]
 
-depends:
+dependencies:
   - ../database
   - ../networking
 "#;
@@ -154,9 +154,9 @@ depends:
         let config: ServiceConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.name, "api");
         assert_eq!(config.modules.len(), 2);
-        assert_eq!(config.depends.len(), 2);
-        assert!(config.depends.contains(&"../database".to_string()));
-        assert!(config.depends.contains(&"../networking".to_string()));
+        assert_eq!(config.dependencies.len(), 2);
+        assert!(config.dependencies.contains(&"../database".to_string()));
+        assert!(config.dependencies.contains(&"../networking".to_string()));
     }
 
     #[test]

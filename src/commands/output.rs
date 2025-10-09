@@ -27,10 +27,10 @@ impl OutputCommand {
         let workspace = terraform_manager.workspace_show()?;
         terraform_manager.workspace_select(&workspace)?;
 
-        // Get service name and dependencies
-        let service_name = terraform_manager.output_value("service")?
+        // Get unit name and dependencies
+        let unit_name = terraform_manager.output_value("service")?
             .as_str()
-            .ok_or_else(|| EnvieError::TerraformError("Service name not found in terraform state".to_string()))?
+            .ok_or_else(|| EnvieError::TerraformError("Unit name not found in terraform state".to_string()))?
             .to_string();
 
         let dependencies: Vec<String> = terraform_manager.output_value("dependencies")?
@@ -50,7 +50,7 @@ impl OutputCommand {
             std::fs::write(&full_path, serde_json::to_string_pretty(&combined_output)?)?;
             self.output_manager.print_green(&format!("Terraform outputs saved to {}", full_path.display()));
         } else {
-            self.output_manager.print_blue(&format!("Combined Terraform outputs for service: {}", service_name));
+            self.output_manager.print_blue(&format!("Combined Terraform outputs for unit: {}", unit_name));
             println!("{}", serde_json::to_string_pretty(&combined_output)?);
         }
 
@@ -66,22 +66,22 @@ impl OutputCommand {
             .partition(|dep| dep.ends_with(":dev"));
 
         // Process non-dev components (stable deployments)
-        let mut unique_service_envs = std::collections::HashSet::new();
+        let mut unique_unit_envs = std::collections::HashSet::new();
         for comp in &non_dev_components {
             let parts: Vec<&str> = comp.split(':').collect();
             if parts.len() == 2 {
                 let comp_name = parts[0];
                 let comp_env = parts[1];
-                let service_name = comp_name.split('/').next().unwrap();
-                unique_service_envs.insert((service_name, comp_env));
+                let unit_name = comp_name.split('/').next().unwrap();
+                unique_unit_envs.insert((unit_name, comp_env));
             }
         }
 
         // Get outputs for stable deployments
-        for (service, env) in unique_service_envs {
-            let service_dir = self.working_directory.join("services").join(service).join("stable_deployments");
-            if service_dir.exists() {
-                let output = self.get_terraform_output(&service_dir, env).await?;
+        for (unit, env) in unique_unit_envs {
+            let unit_dir = self.working_directory.join("services").join(unit).join("stable_deployments");
+            if unit_dir.exists() {
+                let output = self.get_terraform_output(&unit_dir, env).await?;
                 self.merge_outputs(&mut combined_outputs, output);
             }
         }

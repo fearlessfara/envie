@@ -1,0 +1,34 @@
+
+🚀 Deploying 3 unit(s)...
+
+[1/3] Deploying: db
+  📍 Path: units/db
+  🏷️  Type: Service
+  💾 State: Dedicated
+  🔧 Running terraform init...
+  ⚡ Running terraform apply...
+  ✅ Unit deployed successfully
+
+[2/3] Deploying: core
+  📍 Path: units/core
+  🏷️  Type: Service
+  💾 State: Dedicated
+  🔧 Running terraform init...
+  ⚡ Running terraform apply...
+  ✅ Unit deployed successfully
+
+[3/3] Deploying: api
+  📍 Path: units/api
+  🏷️  Type: Service
+  💾 State: Dedicated
+  🔧 Running terraform init...
+  ⚡ Running terraform apply...
+Error: Terraform error: terraform apply failed: [31m╷[0m[0m
+[31m│[0m [0m[1m[31mError: [0m[0m[1mcreating IAM Role (full-backend-ephemeral-items-api): operation error IAM: CreateRole, https response error StatusCode: 403, RequestID: 91895f8d-3e22-4c98-aa3b-20c5f28a6be0, api error InvalidClientTokenId: The security token included in the request is invalid[0m
+[31m│[0m [0m
+[31m│[0m [0m[0m  with module.lambda_function.aws_iam_role.lambda[0],
+[31m│[0m [0m  on .terraform/modules/lambda_function/iam.tf line 94, in resource "aws_iam_role" "lambda":
+[31m│[0m [0m  94: resource "aws_iam_role" "lambda" [4m{[0m[0m
+[31m│[0m [0m
+[31m╵[0m[0m
+

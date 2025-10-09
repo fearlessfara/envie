@@ -32,9 +32,9 @@ impl TestDiscoveryCommand {
             );
             println!("{}  Path: {}", indent, unit.path.display());
             println!("{}  State: {:?}", indent, unit.config.state_management);
-            if !unit.config.depends.is_empty() {
+            if !unit.config.dependencies.is_empty() {
                 println!("{}  Dependencies:", indent);
-                for dep in &unit.config.depends {
+                for dep in &unit.config.dependencies {
                     println!("{}    - {} ({})", indent, dep.path, dep.environment);
                 }
             }

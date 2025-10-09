@@ -1,0 +1,14 @@
+name: api
+description: Lambda functions and API Gateway endpoints that connect to DynamoDB
+unit_type: service
+
+# This unit depends on both core (API Gateway) and db (DynamoDB)
+# Envie will automatically generate remote state data sources for these
+dependencies:
+  - path: ../core
+    environment: ephemeral  # Use same environment as this deployment
+  - path: ../db
+    environment: ephemeral  # Use same environment as this deployment
+
+# Dedicated state for API endpoints and Lambda
+state_management: dedicated

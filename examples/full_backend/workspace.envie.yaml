@@ -1,0 +1,45 @@
+version: "1.0"
+
+project:
+  name: full-backend
+  description: Complete serverless backend example with API Gateway, Lambda, and DynamoDB
+
+# Define stable environments (long-lived)
+environments:
+  stable:
+    prod:
+      backend:
+        type: s3
+        config:
+          bucket: full-backend-tf-state
+          region: eu-west-1
+          key_pattern: "{service}/{module}/terraform.tfstate"
+          dynamodb_table: full-backend-tf-locks
+      workspace: "full-backend-prod"
+
+    staging:
+      backend:
+        type: s3
+        config:
+          bucket: full-backend-tf-state
+          region: eu-west-1
+          key_pattern: "{service}/{module}/terraform.tfstate"
+          dynamodb_table: full-backend-tf-locks
+      workspace: "full-backend-staging"
+
+  # Ephemeral environments (short-lived, per feature/PR)
+  ephemeral:
+    naming_pattern: "full-backend-{env_id}"
+    backend:
+      type: s3
+      config:
+        bucket: full-backend-tf-state
+        region: eu-west-1
+        key_pattern: "{service}/{module}/terraform.tfstate"
+        dynamodb_table: full-backend-tf-locks
+    workspace: "full-backend-{env_id}"
+
+# Default values available to all units
+defaults:
+  aws_region: eu-west-1
+  environment_prefix: fb

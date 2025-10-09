@@ -25,7 +25,7 @@ envie init --name myapp --description "My application infrastructure"
 ```
 
 **What this does**:
-- Creates `workspace.envie` (global environment configuration)
+- Creates `workspace.envie.yaml` (global environment configuration)
 - Creates example service structure in `services/`
 - Creates `.gitignore` with Envie patterns
 - Creates example units with `envie.yaml` files
@@ -35,7 +35,7 @@ envie init --name myapp --description "My application infrastructure"
 ✅ Envie project initialized successfully!
 
 📁 Project structure created:
-  ├── workspace.envie          # Global project configuration
+  ├── workspace.envie.yaml     # Global project configuration
   ├── services/                # Service directory
   │   ├── networking/          # Example networking service
   │   ├── database/            # Example database service
@@ -43,14 +43,14 @@ envie init --name myapp --description "My application infrastructure"
   └── README.md                # Project documentation
 
 🚀 Next steps:
-  1. Review and customize workspace.envie and unit envie.yaml files
+  1. Review and customize workspace.envie.yaml and unit envie.yaml files
   2. Add your services to the services/ directory
   3. Run 'envie deploy --unit <name> --env <id>' to deploy
 ```
 
 ## Step 2: Configure Environments
 
-Open `workspace.envie` and configure your environments:
+Open `workspace.envie.yaml` and configure your environments:
 
 ```yaml
 version: '1.0'
@@ -525,7 +525,7 @@ See dependencies, state management, and configuration.
 Now that you've completed the quickstart:
 
 1. **Customize the units**: Replace example Terraform code with your actual infrastructure
-2. **Add more stable environments**: Define staging, production, etc. in `workspace.envie`
+2. **Add more stable environments**: Define staging, production, etc. in `workspace.envie.yaml`
 3. **Create CI/CD integration**: Use Envie in your pipeline for automated deployments
 4. **Read advanced docs**:
    - [ENVIRONMENT_OVERRIDES.md](ENVIRONMENT_OVERRIDES.md) - Deep dive into environment overrides
@@ -543,7 +543,7 @@ Error: Failed to create backend infrastructure
 ```
 Error: Invalid stable environment 'stable.sanbox' in unit 'lambda'
 ```
-**Solution**: Typo in environment name. Check `workspace.envie` for available stable environments.
+**Solution**: Typo in environment name. Check `workspace.envie.yaml` for available stable environments.
 
 ### Workspace already exists
 Just select the existing workspace - Envie handles this automatically.

@@ -113,7 +113,7 @@ pub enum Commands {
     },
     /// List all available development environments
     List,
-    /// Generate combined outputs for all services and components
+    /// Generate combined outputs for all units
     Output {
         /// Save output to a file
         #[arg(short = 'f', long)]
@@ -125,9 +125,9 @@ pub enum Commands {
     },
     /// Clean .terraform directories and reinitialize Terraform
     Clean {
-        /// The name of the service to clean
+        /// The name of the unit to clean
         #[arg(long)]
-        service: Option<String>,
+        unit: Option<String>,
         
         /// Run 'terraform init -upgrade' instead of 'terraform init'
         #[arg(long)]
@@ -137,13 +137,13 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Show detailed information about services, modules, and dependencies
+    /// Show detailed information about units and dependencies
     Show {
-        /// The name of the service to show (optional - shows all if not provided)
+        /// The name of the unit to show (optional - shows all if not provided)
         #[arg(long)]
-        service: Option<String>,
-        
-        /// Show only module information
+        unit: Option<String>,
+
+        /// Show only sub-unit information
         #[arg(long)]
         modules: bool,
         

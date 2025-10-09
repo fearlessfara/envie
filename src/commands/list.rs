@@ -80,7 +80,7 @@ impl ListCommand {
         let mut current = self.working_directory.clone();
         
         loop {
-            let workspace_file = current.join("workspace.envie");
+            let workspace_file = current.join("workspace.envie.yaml");
             if workspace_file.exists() {
                 return Ok(current);
             }

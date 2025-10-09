@@ -46,7 +46,7 @@ impl InitCommand {
         // Create workspace configuration
         let workspace_config = self.create_workspace_config(&project_info)?;
         
-        // Write workspace.envie
+        // Write workspace.envie.yaml
         self.write_workspace_config(&workspace_config)?;
 
         // Create services directory structure
@@ -63,23 +63,23 @@ impl InitCommand {
 
         println!("\n✅ Envie project initialized successfully!");
         println!("\n📁 Project structure created:");
-        println!("  ├── workspace.envie          # Global project configuration (keeping for compatibility)");
-        println!("  ├── services/                # Service directory");
+        println!("  ├── workspace.envie.yaml     # Global project configuration");
+        println!("  ├── services/                # Units directory");
         println!("  │   ├── networking/          # Example networking service");
         println!("  │   ├── database/            # Example database service");
         println!("  │   └── api/                 # Example API service");
         println!("  └── README.md                # Project documentation");
         
         println!("\n🚀 Next steps:");
-        println!("  1. Review and customize workspace.envie and unit envie.yaml files");
-        println!("  2. Add your services to the services/ directory");
+        println!("  1. Review and customize workspace.envie.yaml and unit envie.yaml files");
+        println!("  2. Add your units to the services/ directory");
         println!("  3. Run 'envie deploy --service <name> --merge-request <id>' to deploy");
 
         Ok(())
     }
 
     fn is_already_initialized(&self) -> Result<bool> {
-        let workspace_envie = self.working_directory.join("workspace.envie");
+        let workspace_envie = self.working_directory.join("workspace.envie.yaml");
         Ok(workspace_envie.exists())
     }
 
@@ -148,7 +148,7 @@ impl InitCommand {
     }
 
     fn write_workspace_config(&self, config: &WorkspaceConfig) -> Result<()> {
-        let workspace_envie = self.working_directory.join("workspace.envie");
+        let workspace_envie = self.working_directory.join("workspace.envie.yaml");
         let content = serde_yaml::to_string(config)?;
         std::fs::write(workspace_envie, content)?;
         Ok(())
@@ -189,14 +189,14 @@ impl InitCommand {
                     name: "vpc".to_string(),
                     description: "VPC configuration".to_string(),
                     path: "modules/vpc".to_string(),
-                    depends: vec![],
+                    dependencies: vec![],
                     state_management: crate::common::service_config::StateManagement::Service,
                 },
                 ModuleConfig {
                     name: "subnets".to_string(),
                     description: "Subnet configuration".to_string(),
                     path: "modules/subnets".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "./vpc".to_string(),
                             environment: "ephemeral".to_string(),
@@ -208,7 +208,7 @@ impl InitCommand {
                     name: "security-groups".to_string(),
                     description: "Security group configuration".to_string(),
                     path: "modules/security-groups".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "./vpc".to_string(),
                             environment: "ephemeral".to_string(),
@@ -217,7 +217,7 @@ impl InitCommand {
                     state_management: crate::common::service_config::StateManagement::Service,
                 },
             ],
-            depends: vec![],
+            dependencies: vec![],
         };
 
         let content = serde_yaml::to_string(&config)?;
@@ -244,7 +244,7 @@ impl InitCommand {
                     name: "dynamodb".to_string(),
                     description: "DynamoDB table configuration".to_string(),
                     path: "modules/dynamodb".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "../networking/modules/vpc".to_string(),
                             environment: "ephemeral".to_string(),
@@ -256,7 +256,7 @@ impl InitCommand {
                     name: "rds".to_string(),
                     description: "RDS database configuration".to_string(),
                     path: "modules/rds".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "../networking/modules/vpc".to_string(),
                             environment: "ephemeral".to_string(),
@@ -269,7 +269,7 @@ impl InitCommand {
                     state_management: crate::common::service_config::StateManagement::Dedicated,
                 },
             ],
-            depends: vec!["../networking".to_string()],
+            dependencies: vec!["../networking".to_string()],
         };
 
         let content = serde_yaml::to_string(&config)?;
@@ -297,7 +297,7 @@ impl InitCommand {
                     name: "lambda".to_string(),
                     description: "Lambda function for API handler".to_string(),
                     path: "modules/lambda".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "../../database/modules/dynamodb".to_string(),
                             environment: "stable.sandbox".to_string(),
@@ -313,7 +313,7 @@ impl InitCommand {
                     name: "step-functions".to_string(),
                     description: "Step Functions state machine".to_string(),
                     path: "modules/step-functions".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "./lambda".to_string(),
                             environment: "ephemeral".to_string(),
@@ -325,7 +325,7 @@ impl InitCommand {
                     name: "gateway".to_string(),
                     description: "API Gateway configuration".to_string(),
                     path: "modules/gateway".to_string(),
-                    depends: vec![
+                    dependencies: vec![
                         crate::common::service_config::DependencyReference {
                             path: "./step-functions".to_string(),
                             environment: "ephemeral".to_string(),
@@ -334,7 +334,7 @@ impl InitCommand {
                     state_management: crate::common::service_config::StateManagement::Service,
                 },
             ],
-            depends: vec!["../database".to_string(), "../networking".to_string()],
+            dependencies: vec!["../database".to_string(), "../networking".to_string()],
         };
 
         let content = serde_yaml::to_string(&config)?;
@@ -383,9 +383,9 @@ output "example_output" {{
             String::new()
         };
 
-        let envie_entries = "\n# Envie generated files\nenvie-remote-state.tf\nenvie-backend.tf\n.envie-variables.tf\n.terraform/\n.terraform.lock.hcl\n*.tfstate\n*.tfstate.*\nterraform.tfvars\n";
+        let envie_entries = "\n# Envie generated files (auto-generated, should not be committed)\n*.envie.tf\n\n# Terraform files\n.terraform/\n.terraform.lock.hcl\n*.tfstate\n*.tfstate.*\nterraform.tfvars\n";
 
-        if !gitignore_content.contains("envie-remote-state.tf") {
+        if !gitignore_content.contains("*.envie.tf") {
             gitignore_content.push_str(envie_entries);
             std::fs::write(gitignore_path, gitignore_content)?;
         }
@@ -404,8 +404,8 @@ This project is managed by [Envie](https://github.com/your-org/envie), a tool fo
 ## Project Structure
 
 ```
-├── workspace.envie          # Global project configuration
-├── services/                # Service directory
+├── workspace.envie.yaml     # Global project configuration
+├── services/                # Units directory
 │   ├── networking/          # Networking infrastructure
 │   │   ├── envie.yaml      # Unit configuration
 │   │   └── modules/        # Terraform modules
@@ -437,7 +437,7 @@ This project is managed by [Envie](https://github.com/your-org/envie), a tool fo
 
 ## Configuration
 
-- `workspace.envie`: Global project configuration with environment definitions
+- `workspace.envie.yaml`: Global project configuration with environment definitions
 - `services/*/envie.yaml`: Per-unit configuration with dependencies
 
 ## Environments

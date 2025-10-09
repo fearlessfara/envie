@@ -115,12 +115,12 @@ impl CommandHandler {
                 output.execute(options).await
             }
             Commands::Clean {
-                service,
+                unit,
                 upgrade,
                 verbose: _,
             } => {
                 let options = CleanOptions {
-                    service_name: service,
+                    unit_name: unit,
                     upgrade,
                 };
 
@@ -128,13 +128,13 @@ impl CommandHandler {
                 cleaner.execute(options)
             }
             Commands::Show {
-                service,
+                unit,
                 modules: _,
                 dependencies: _,
                 verbose,
             } => {
                 let options = ShowOptions {
-                    service,
+                    unit,
                     verbose,
                 };
 

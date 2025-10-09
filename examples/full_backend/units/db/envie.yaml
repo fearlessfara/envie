@@ -1,0 +1,9 @@
+name: db
+description: DynamoDB table for items storage
+unit_type: service
+
+# No dependencies - database is independent
+dependencies: []
+
+# Dedicated state for database
+state_management: dedicated

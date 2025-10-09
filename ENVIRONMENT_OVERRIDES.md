@@ -56,7 +56,7 @@ depends:
 ```
 
 ### Stable Environments
-Long-lived environments defined in `workspace.envie`:
+Long-lived environments defined in `workspace.envie.yaml`:
 
 - **`stable.sandbox`** - References the "sandbox" stable environment
 - **`stable.production`** - References the "production" stable environment
@@ -139,7 +139,7 @@ envie deploy --unit infrastructure/compute --env my-feature \
 - ✅ They all connect to stable sandbox dependencies
 - ✅ Fast iteration on compute layer only
 
-## Configuration in workspace.envie
+## Configuration in workspace.envie.yaml
 
 Define your stable environments:
 

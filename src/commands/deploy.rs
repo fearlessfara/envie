@@ -28,7 +28,7 @@ impl DeployCommand {
     }
     
     pub async fn execute(&self, options: DeployOptions) -> Result<()> {
-        // Find the project root (where workspace.envie is)
+        // Find the project root (where workspace.envie.yaml is)
         let project_root = self.find_project_root()?;
         
         if options.verbose {
@@ -49,6 +49,12 @@ impl DeployCommand {
 
         // Load environment configuration for validation
         let environment_config = self.load_environment_config()?;
+        
+        if options.verbose {
+            println!("🔍 Environment config loaded:");
+            println!("  Ephemeral backend type: {}", environment_config.ephemeral.backend.backend_type);
+            println!("  Ephemeral backend config: {:?}", environment_config.ephemeral.backend.config);
+        }
 
         // Validate environment references in all units
         let available_stable_envs: Vec<String> = environment_config.stable.keys().cloned().collect();
@@ -198,7 +204,7 @@ impl DeployCommand {
         let unit_path = project_root.join(&unit.path);
         
         // Convert dependencies to the format expected by TerraformGenerator
-        let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.depends.iter().map(|dep| {
+        let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.dependencies.iter().map(|dep| {
             crate::common::service_config::DependencyReference {
                 path: dep.path.clone(),
                 environment: dep.environment.clone(),
@@ -224,9 +230,51 @@ impl DeployCommand {
         let terraform_manager = TerraformManager::new(&unit_path)
             .with_verbose(options.verbose);
 
+        // Prepare backend configuration and variables
+        let resolved_env = environment_resolver.resolve_environment("ephemeral")?;
+
+        // Build backend configuration for terraform init
+        let mut backend_config: Vec<(String, String)> = Vec::new();
+
+        // Generate state key based on state management strategy
+        let state_key = match &unit.config.state_management {
+            crate::common::unit_config::StateManagement::Dedicated => {
+                let module_part = if unit.config.name.is_empty() {
+                    &unit.config.name
+                } else {
+                    &unit.config.name
+                };
+                format!("ephemeral/{}/{}/{}/terraform.tfstate", workspace, unit.config.name, module_part)
+            }
+            crate::common::unit_config::StateManagement::Parent => {
+                format!("ephemeral/{}/{}/service/terraform.tfstate", workspace, unit.config.name)
+            }
+            crate::common::unit_config::StateManagement::Shared(shared_id) => {
+                format!("ephemeral/{}/{}/shared/terraform.tfstate", workspace, shared_id)
+            }
+            crate::common::unit_config::StateManagement::Group(group_id) => {
+                format!("ephemeral/{}/{}/shared/terraform.tfstate", workspace, group_id)
+            }
+        };
+
+        backend_config.push(("key".to_string(), state_key));
+
+        // Add other backend config values
+        for (key, value) in &resolved_env.backend.config {
+            if key == "key_pattern" || key == "key" {
+                continue; // Already handled above
+            }
+            backend_config.push((key.clone(), value.clone()));
+        }
+
+        let backend_config_refs: Vec<(&str, &str)> = backend_config
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
         println!("  🔧 Running terraform init...");
-        terraform_manager.init()?;
-        
+        terraform_manager.init_with_backend_config(&backend_config_refs)?;
+
         // Create or select workspace
         let workspaces = terraform_manager.workspace_list()?;
         if workspaces.iter().any(|w| w == workspace) {
@@ -234,13 +282,33 @@ impl DeployCommand {
         } else {
             terraform_manager.workspace_new(workspace)?;
         }
-        
-        // Apply Terraform
+
+        // Prepare Terraform variables for apply
+        let mut tf_vars: Vec<(String, String)> = Vec::new();
+
+        // Add workspace variable
+        tf_vars.push(("envie_workspace".to_string(), workspace.to_string()));
+
+        // Add backend configuration variables (for remote state data sources)
+        for (key, value) in &resolved_env.backend.config {
+            if key == "key_pattern" {
+                continue;
+            }
+            tf_vars.push((format!("envie_backend_{}", key), value.clone()));
+        }
+
+        // Convert to the format expected by terraform_manager.apply
+        let tf_vars_refs: Vec<(&str, &str)> = tf_vars
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        // Apply Terraform with variables
         println!("  ⚡ Running terraform apply...");
-        terraform_manager.apply(&[])?;
-        
+        terraform_manager.apply(&tf_vars_refs)?;
+
         println!("  ✅ Unit deployed successfully\n");
-        
+
         Ok(())
     }
     
@@ -253,11 +321,11 @@ impl DeployCommand {
         self.output_manager.print_blue("\n🔍 Resolving dependencies:\n");
 
         for unit in deployment_order {
-            if !unit.config.depends.is_empty() {
+            if !unit.config.dependencies.is_empty() {
                 println!("  ├─ {}", unit.config.name);
 
-                for (i, dep) in unit.config.depends.iter().enumerate() {
-                    let is_last = i == unit.config.depends.len() - 1;
+                for (i, dep) in unit.config.dependencies.iter().enumerate() {
+                    let is_last = i == unit.config.dependencies.len() - 1;
                     let prefix = if is_last { "  └─" } else { "  ├─" };
 
                     // Extract service name from path for override lookup
@@ -317,9 +385,9 @@ impl DeployCommand {
         println!("Dependencies:");
         let mut has_dependencies = false;
         for unit in deployment_order {
-            if !unit.config.depends.is_empty() {
+            if !unit.config.dependencies.is_empty() {
                 has_dependencies = true;
-                for dep in &unit.config.depends {
+                for dep in &unit.config.dependencies {
                     let (source_service, _) = self.extract_service_module_from_path(&dep.path)?;
                     let environment_to_use = if let Some(override_env) = environment_overrides.get(&source_service) {
                         override_env.clone()
@@ -398,7 +466,7 @@ impl DeployCommand {
             name: unit.config.name.clone(),
             description: unit.config.description.clone(),
             path: unit.path.to_string_lossy().to_string(),
-            depends: unit.config.depends.iter().map(|dep| {
+            dependencies: unit.config.dependencies.iter().map(|dep| {
                 crate::common::service_config::DependencyReference {
                     path: dep.path.clone(),
                     environment: dep.environment.clone(),
@@ -421,7 +489,7 @@ impl DeployCommand {
     }
     
     fn get_project_name(&self) -> Result<String> {
-        let workspace_file = self.working_directory.join("workspace.envie");
+        let workspace_file = self.working_directory.join("workspace.envie.yaml");
         if !workspace_file.exists() {
             return Ok("envie-project".to_string());
         }
@@ -435,7 +503,7 @@ impl DeployCommand {
     }
     
     fn load_environment_config(&self) -> Result<EnvironmentConfig> {
-        let workspace_file = self.working_directory.join("workspace.envie");
+        let workspace_file = self.working_directory.join("workspace.envie.yaml");
         if !workspace_file.exists() {
             // Return default config
             return Ok(EnvironmentConfig {
@@ -479,12 +547,12 @@ impl DeployCommand {
         Ok(Vec::new())
     }
     
-    /// Find the project root by searching up for workspace.envie
+    /// Find the project root by searching up for workspace.envie.yaml
     fn find_project_root(&self) -> Result<PathBuf> {
         let mut current = self.working_directory.clone();
         
         loop {
-            let workspace_file = current.join("workspace.envie");
+            let workspace_file = current.join("workspace.envie.yaml");
             if workspace_file.exists() {
                 return Ok(current);
             }
@@ -493,7 +561,7 @@ impl DeployCommand {
             if let Some(parent) = current.parent() {
                 current = parent.to_path_buf();
             } else {
-                // No workspace.envie found, use working directory as fallback
+                // No workspace.envie.yaml found, use working directory as fallback
                 return Ok(self.working_directory.clone());
             }
         }

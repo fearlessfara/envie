@@ -1,9 +1,3 @@
-/target
-.envie.yaml
-.envie.yml
-!.envie.example.yaml
-.envie/
-
 # Envie generated files (auto-generated, should not be committed)
 *.envie.tf
 
@@ -13,3 +7,11 @@
 *.tfstate
 *.tfstate.*
 terraform.tfvars
+*.tfplan
+
+# Lambda dependencies
+units/api/lambda/node_modules/
+units/api/lambda/package-lock.json
+
+# OS files
+.DS_Store

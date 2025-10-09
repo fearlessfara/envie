@@ -1,0 +1,9 @@
+name: core
+description: API Gateway REST API base configuration
+unit_type: service
+
+# No dependencies - this is the foundation
+dependencies: []
+
+# Dedicated state for API Gateway base
+state_management: dedicated

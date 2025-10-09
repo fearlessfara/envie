@@ -43,6 +43,15 @@ impl TerraformManager {
         self.run_command("init", &["-upgrade"], false)
     }
 
+    pub fn init_with_backend_config(&self, backend_config: &[(&str, &str)]) -> Result<()> {
+        let mut args = vec![];
+        for (key, value) in backend_config {
+            args.push(format!("-backend-config={}={}", key, value));
+        }
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run_command("init", &arg_refs, false)
+    }
+
     pub fn workspace_list(&self) -> Result<Vec<String>> {
         let output = self.run_command_capture("workspace", &["list"], false)?;
         let workspaces: Vec<String> = output

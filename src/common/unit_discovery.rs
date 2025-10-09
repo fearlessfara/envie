@@ -185,7 +185,7 @@ impl UnitDiscovery {
         visited.insert(unit_name.to_string());
         
         if let Some(unit) = self.registry.get_unit(unit_name) {
-            for dep in &unit.config.depends {
+            for dep in &unit.config.dependencies {
                 // Resolve the dependency path to a unit name
                 if let Some(dep_unit) = self.resolve_dependency_path(&unit.path, &dep.path) {
                     self.collect_dependencies(&dep_unit, visited, result)?;
@@ -278,7 +278,7 @@ impl UnitDiscovery {
             visiting.insert(unit_name.to_string());
 
             // First, recursively visit all dependencies
-            for dep in &unit.config.depends {
+            for dep in &unit.config.dependencies {
                 if let Some(dep_unit) = self.resolve_dependency_path(&unit.path, &dep.path) {
                     self.topological_visit(&dep_unit, visiting, visited, result)?;
                 }

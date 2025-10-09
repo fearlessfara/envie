@@ -4,7 +4,7 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct CleanOptions {
-    pub service_name: Option<String>,
+    pub unit_name: Option<String>,
     pub upgrade: bool,
 }
 
@@ -22,35 +22,35 @@ impl CleanCommand {
     }
 
     pub fn execute(&self, options: CleanOptions) -> Result<()> {
-        let services_dir = if let Some(service_name) = &options.service_name {
-            self.working_directory.join("services").join(service_name)
+        let units_dir = if let Some(unit_name) = &options.unit_name {
+            self.working_directory.join("units").join(unit_name)
         } else {
-            self.working_directory.join("services")
+            self.working_directory.join("units")
         };
 
-        if options.service_name.is_some() {
-            self.output_manager.print_blue(&format!("Cleaning service: {}", options.service_name.as_ref().unwrap()));
+        if options.unit_name.is_some() {
+            self.output_manager.print_blue(&format!("Cleaning unit: {}", options.unit_name.as_ref().unwrap()));
         } else {
-            self.output_manager.print_blue("Cleaning all services");
+            self.output_manager.print_blue("Cleaning all units");
         }
 
         // Clean .terraform directories
-        self.clean_terraform_directories(&services_dir)?;
+        self.clean_terraform_directories(&units_dir)?;
 
         // Initialize terraform in main and temp_deployments directories
-        self.initialize_terraform_directories(&services_dir, options.upgrade)?;
+        self.initialize_terraform_directories(&units_dir, options.upgrade)?;
 
         // Clean and initialize .envie directory
         self.clean_envie_directory(options.upgrade)?;
 
-        self.output_manager.print_green("Terraform initialization and workspace selection complete in specified services.");
+        self.output_manager.print_green("Terraform initialization and workspace selection complete in specified units.");
 
         Ok(())
     }
 
-    fn clean_terraform_directories(&self, services_dir: &std::path::Path) -> Result<()> {
+    fn clean_terraform_directories(&self, units_dir: &std::path::Path) -> Result<()> {
         // Find and delete all .terraform directories, excluding stable_deployments
-        let entries: Vec<_> = WalkDir::new(services_dir)
+        let entries: Vec<_> = WalkDir::new(units_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| {
@@ -66,20 +66,20 @@ impl CleanCommand {
             }
         }
 
-        self.output_manager.print_green("Deleted all .terraform directories in specified services, excluding stable_deployments.");
+        self.output_manager.print_green("Deleted all .terraform directories in specified units, excluding stable_deployments.");
         Ok(())
     }
 
-    fn initialize_terraform_directories(&self, services_dir: &std::path::Path, upgrade: bool) -> Result<()> {
+    fn initialize_terraform_directories(&self, units_dir: &std::path::Path, upgrade: bool) -> Result<()> {
         // Find all main and temp_deployments directories
-        let main_dirs: Vec<_> = WalkDir::new(services_dir)
+        let main_dirs: Vec<_> = WalkDir::new(units_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name() == "main" && e.file_type().is_dir())
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        let temp_deployment_dirs: Vec<_> = WalkDir::new(services_dir)
+        let temp_deployment_dirs: Vec<_> = WalkDir::new(units_dir)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_name() == "temp_deployments" && e.file_type().is_dir())
@@ -149,11 +149,11 @@ mod tests {
     #[test]
     fn test_clean_options() {
         let options = CleanOptions {
-            service_name: Some("test-service".to_string()),
+            unit_name: Some("test-unit".to_string()),
             upgrade: true,
         };
 
-        assert_eq!(options.service_name, Some("test-service".to_string()));
+        assert_eq!(options.unit_name, Some("test-unit".to_string()));
         assert!(options.upgrade);
     }
 }

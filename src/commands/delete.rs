@@ -124,9 +124,9 @@ impl DeleteCommand {
         for (i, unit) in units.iter().enumerate() {
             println!("  {}. {} ({:?})", i + 1, unit.config.name, unit.config.unit_type);
             println!("     Path: {}", unit.path.display());
-            if !unit.config.depends.is_empty() {
+            if !unit.config.dependencies.is_empty() {
                 println!("     Dependencies:");
-                for dep in &unit.config.depends {
+                for dep in &unit.config.dependencies {
                     println!("       - {}", dep.path);
                 }
             }
@@ -249,7 +249,7 @@ impl DeleteCommand {
         let mut current = self.working_directory.clone();
 
         loop {
-            let workspace_file = current.join("workspace.envie");
+            let workspace_file = current.join("workspace.envie.yaml");
             if workspace_file.exists() {
                 return Ok(current);
             }
@@ -263,7 +263,7 @@ impl DeleteCommand {
     }
 
     fn get_project_name(&self, project_root: &PathBuf) -> Result<String> {
-        let workspace_file = project_root.join("workspace.envie");
+        let workspace_file = project_root.join("workspace.envie.yaml");
         if !workspace_file.exists() {
             return Ok("envie-project".to_string());
         }

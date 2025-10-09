@@ -1,5 +1,5 @@
-# Example workspace.envie with multiple stable environments
-# Copy this to workspace.envie and customize for your project
+# Example workspace.envie.yaml with multiple stable environments
+# Copy this to workspace.envie.yaml and customize for your project
 
 version: '1.0'
 

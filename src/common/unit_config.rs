@@ -23,7 +23,7 @@ pub struct UnitConfig {
     
     /// Dependencies on other units
     #[serde(default)]
-    pub depends: Vec<DependencyReference>,
+    pub dependencies: Vec<DependencyReference>,
     
     /// State management strategy
     #[serde(default)]
@@ -159,7 +159,7 @@ impl UnitConfig {
     /// Validate environment references in dependencies
     /// Returns Ok if all environment references are valid, or an error with details
     pub fn validate_environment_references(&self, available_stable_envs: &[String]) -> crate::common::Result<()> {
-        for dep in &self.depends {
+        for dep in &self.dependencies {
             let env = &dep.environment;
 
             // Check if it's a valid environment reference

@@ -163,19 +163,24 @@ impl EnvironmentResolver {
         match &resolved_env.environment_type {
             EnvironmentType::Ephemeral => {
                 // ephemeral/{workspace}/{service}/{module}/terraform.tfstate
-                format!("ephemeral/{}/{}/{}/terraform.tfstate", 
-                    resolved_env.workspace, service, module)
+                // If module is empty, use service name as the module name to avoid double slashes
+                let module_part = if module.is_empty() { service } else { module };
+                format!("ephemeral/{}/{}/{}/terraform.tfstate",
+                    resolved_env.workspace, service, module_part)
             }
             EnvironmentType::Stable(env_name) => {
                 // Use the key_pattern from the backend config and substitute placeholders
                 let default_pattern = "stable/{environment}/{service}/{module}/terraform.tfstate".to_string();
                 let key_pattern = resolved_env.backend.config.get("key_pattern")
                     .unwrap_or(&default_pattern);
-                
+
+                // If module is empty, use service name as the module name to avoid double slashes
+                let module_part = if module.is_empty() { service } else { module };
+
                 key_pattern
                     .replace("{environment}", env_name)
                     .replace("{service}", service)
-                    .replace("{module}", module)
+                    .replace("{module}", module_part)
             }
         }
     }

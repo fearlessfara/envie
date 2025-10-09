@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct ShowOptions {
-    pub service: Option<String>,
+    pub unit: Option<String>,
     pub verbose: bool,
 }
 
@@ -30,7 +30,7 @@ impl ShowCommand {
         let mut discovery = UnitDiscovery::new(self.working_directory.clone());
         discovery.discover_all()?;
         
-        if let Some(unit_name) = &options.service {
+        if let Some(unit_name) = &options.unit {
             // Show specific unit
             self.show_unit(unit_name, &discovery, &options)?;
         } else {
@@ -45,7 +45,7 @@ impl ShowCommand {
         self.output_manager.print_green("📋 Envie Project Overview");
         println!();
 
-        // Show project info if workspace.envie exists
+        // Show project info if workspace.envie.yaml exists
         if let Ok(workspace_config) = self.load_workspace_config() {
             if let Some(project) = &workspace_config.project {
                 self.output_manager.print_blue("Project:");
@@ -70,9 +70,9 @@ impl ShowCommand {
                     println!("{}   Path: {}", indent, unit.path.display());
                     println!("{}   State: {:?}", indent, unit.config.state_management);
                     
-                    if !unit.config.depends.is_empty() {
+                    if !unit.config.dependencies.is_empty() {
                         println!("{}   Dependencies:", indent);
-                        for dep in &unit.config.depends {
+                        for dep in &unit.config.dependencies {
                             println!("{}     - {} ({})", indent, dep.path, dep.environment);
                         }
                     }
@@ -101,9 +101,9 @@ impl ShowCommand {
         println!("  State Management: {:?}", unit.config.state_management);
         println!();
 
-        if !unit.config.depends.is_empty() {
+        if !unit.config.dependencies.is_empty() {
             self.output_manager.print_blue("  Dependencies:");
-            for dep in &unit.config.depends {
+            for dep in &unit.config.dependencies {
                 println!("    📎 {} ({})", dep.path, dep.environment);
             }
             println!();
@@ -131,10 +131,10 @@ impl ShowCommand {
     }
 
     fn load_workspace_config(&self) -> Result<WorkspaceConfig> {
-        let workspace_file = self.working_directory.join("workspace.envie");
+        let workspace_file = self.working_directory.join("workspace.envie.yaml");
         if !workspace_file.exists() {
             return Err(EnvieError::ValidationError(
-                "No workspace.envie found. Run 'envie init' first.".to_string()
+                "No workspace.envie.yaml found. Run 'envie init' first.".to_string()
             ));
         }
 
@@ -159,11 +159,11 @@ mod tests {
     #[test]
     fn test_show_options() {
         let options = ShowOptions {
-            service: Some("test-service".to_string()),
+            unit: Some("test-unit".to_string()),
             verbose: true,
         };
 
-        assert_eq!(options.service, Some("test-service".to_string()));
+        assert_eq!(options.unit, Some("test-unit".to_string()));
         assert!(options.verbose);
     }
 }

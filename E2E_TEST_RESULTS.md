@@ -27,7 +27,7 @@ envie init --name demo-app --description "Demo application for E2E testing" --no
 ```
 
 **Result**: SUCCESS
-- Created `workspace.envie` with project configuration
+- Created `workspace.envie.yaml` with project configuration
 - Created example service structure in `services/`
 - Created `.gitignore` with Envie patterns
 - Created `README.md`
@@ -37,7 +37,7 @@ envie init --name demo-app --description "Demo application for E2E testing" --no
 ✅ Envie project initialized successfully!
 
 📁 Project structure created:
-  ├── workspace.envie
+  ├── workspace.envie.yaml
   ├── services/
   │   ├── networking/
   │   ├── database/
@@ -47,7 +47,7 @@ envie init --name demo-app --description "Demo application for E2E testing" --no
 
 ### Step 2: Configure Environments ✅
 
-**Action**: Updated `workspace.envie` to define:
+**Action**: Updated `workspace.envie.yaml` to define:
 - **Ephemeral** environment pattern: `{project}-{id}`
 - **Stable** environment: `sandbox` (for shared resources)
 
