@@ -106,9 +106,17 @@ impl CommandHandler {
                 let lister = ListCommand::new(self.working_directory.clone());
                 lister.list()
             }
-            Commands::Output { file, verbose: _ } => {
+            Commands::Output { env, unit, file, format, verbose: _ } => {
+                let output_format = match format.as_str() {
+                    "json" => crate::commands::output::OutputFormat::Json,
+                    "table" | _ => crate::commands::output::OutputFormat::Table,
+                };
+
                 let options = OutputOptions {
+                    env_id: env,
+                    unit_name: unit,
                     output_file: file.map(|p| p.to_string_lossy().to_string()),
+                    format: output_format,
                 };
 
                 let output = OutputCommand::new(self.working_directory.clone());

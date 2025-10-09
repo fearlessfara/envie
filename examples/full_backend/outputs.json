@@ -1,0 +1,9 @@
+{
+  "db_table_name": "full-backend-ephemeral-items",
+  "core_stage_name": "ephemeral",
+  "db_table_arn": "arn:aws:dynamodb:eu-west-1:840181656986:table/full-backend-ephemeral-items",
+  "core_api_id": "cgm3gagutg",
+  "core_api_root_resource_id": "9wl78ebk6b",
+  "core_api_execution_arn": "arn:aws:execute-api:eu-west-1:840181656986:cgm3gagutg",
+  "api_lambda_function_name": "full-backend-ephemeral-items-api"
+}

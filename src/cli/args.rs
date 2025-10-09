@@ -115,10 +115,22 @@ pub enum Commands {
     List,
     /// Generate combined outputs for all units
     Output {
+        /// The ID of the environment to get outputs from
+        #[arg(long)]
+        env: String,
+
+        /// The name of the unit to get outputs from (optional - gets all units if not provided)
+        #[arg(short = 'U', long)]
+        unit: Option<String>,
+
         /// Save output to a file
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
-        
+
+        /// Output format (json or table)
+        #[arg(long, default_value = "table")]
+        format: String,
+
         /// Print detailed output during execution
         #[arg(long)]
         verbose: bool,
