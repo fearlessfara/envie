@@ -178,29 +178,48 @@ impl UnitDiscovery {
         visited: &mut std::collections::HashSet<String>,
         result: &mut Vec<&'a DiscoveredUnit>,
     ) -> Result<()> {
+        // If already visited, skip to avoid duplicates and circular dependencies
         if visited.contains(unit_name) {
-            return Ok(()); // Avoid circular dependencies
+            return Ok(());
         }
         
+        // Mark as visited before processing to prevent duplicates
         visited.insert(unit_name.to_string());
         
         if let Some(unit) = self.registry.get_unit(unit_name) {
+            // First, recursively collect all dependencies
             for dep in &unit.config.dependencies {
-                // Resolve the dependency path to a unit name
-                if let Some(dep_unit) = self.resolve_dependency_path(&unit.path, &dep.path) {
-                    self.collect_dependencies(&dep_unit, visited, result)?;
-                    if let Some(dep_unit_ref) = self.registry.get_unit(&dep_unit) {
-                        result.push(dep_unit_ref);
+                // Resolve the dependency (either by path or by name) to a unit name
+                let dep_unit_name = if let Some(name) = dep.name() {
+                    // Name-based dependency - resolve directly
+                    name.clone()
+                } else if let Some(path) = dep.path() {
+                    // Path-based dependency - resolve path to unit name
+                    if let Ok(Some(dep_unit)) = self.resolve_dependency_path(&unit.path, path) {
+                        dep_unit
+                    } else {
+                        continue;
                     }
-                }
+                } else {
+                    continue;
+                };
+                
+                // Recursively collect dependencies of this dependency
+                // This will add the dependency and its dependencies to the result
+                self.collect_dependencies(&dep_unit_name, visited, result)?;
             }
+            
+            // Add this unit to result after all its dependencies have been added
+            // (only if it's not the root unit being resolved, which is added separately)
+            // Actually, we should add it here to maintain topological order
+            result.push(unit);
         }
         
         Ok(())
     }
     
     /// Resolve a dependency path to a unit name
-    fn resolve_dependency_path(&self, from_path: &PathBuf, dep_path: &str) -> Option<String> {
+    fn resolve_dependency_path(&self, from_path: &PathBuf, dep_path: &str) -> Result<Option<String>> {
         // Convert relative path to path relative to project root
         let from_dir = from_path;
         let dep_relative = from_dir.join(dep_path);
@@ -210,10 +229,10 @@ impl UnitDiscovery {
 
         // Find the unit by path
         if let Some(unit) = self.registry.get_unit_by_path(&dep_normalized) {
-            return Some(unit.config.name.clone());
+            return Ok(Some(unit.config.name.clone()));
         }
 
-        None
+        Ok(None)
     }
 
     /// Normalize a path by resolving . and .. components
@@ -279,9 +298,21 @@ impl UnitDiscovery {
 
             // First, recursively visit all dependencies
             for dep in &unit.config.dependencies {
-                if let Some(dep_unit) = self.resolve_dependency_path(&unit.path, &dep.path) {
-                    self.topological_visit(&dep_unit, visiting, visited, result)?;
-                }
+                let dep_unit_name = if let Some(name) = dep.name() {
+                    // Name-based dependency
+                    name.clone()
+                } else if let Some(path) = dep.path() {
+                    // Path-based dependency - resolve path to unit name
+                    if let Ok(Some(dep_unit)) = self.resolve_dependency_path(&unit.path, path) {
+                        dep_unit
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                };
+                
+                self.topological_visit(&dep_unit_name, visiting, visited, result)?;
             }
 
             // Remove from visiting, mark as fully processed
@@ -300,13 +331,10 @@ impl UnitDiscovery {
         let mut visited = std::collections::HashSet::new();
         let mut result = Vec::new();
         
-        // Collect all dependencies recursively
+        // Collect all dependencies recursively (this will also add the root unit)
         self.collect_dependencies(unit_name, &mut visited, &mut result)?;
         
-        // Add the unit itself at the end
-        if let Some(unit) = self.registry.get_unit(unit_name) {
-            result.push(unit);
-        }
+        // Note: collect_dependencies now adds the unit itself, so we don't need to add it again
         
         Ok(result)
     }

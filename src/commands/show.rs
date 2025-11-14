@@ -73,7 +73,8 @@ impl ShowCommand {
                     if !unit.config.dependencies.is_empty() {
                         println!("{}   Dependencies:", indent);
                         for dep in &unit.config.dependencies {
-                            println!("{}     - {} ({})", indent, dep.path, dep.environment);
+                            let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                            println!("{}     - {}", indent, dep_display);
                         }
                     }
                     println!();
@@ -104,7 +105,8 @@ impl ShowCommand {
         if !unit.config.dependencies.is_empty() {
             self.output_manager.print_blue("  Dependencies:");
             for dep in &unit.config.dependencies {
-                println!("    📎 {} ({})", dep.path, dep.environment);
+                let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                println!("    📎 {}", dep_display);
             }
             println!();
         }

@@ -56,11 +56,8 @@ impl DeployCommand {
             println!("  Ephemeral backend config: {:?}", environment_config.ephemeral.backend.config);
         }
 
-        // Validate environment references in all units
+        // Get available stable environments for prompting
         let available_stable_envs: Vec<String> = environment_config.stable.keys().cloned().collect();
-        for unit in discovery.registry.get_all_units() {
-            unit.config.validate_environment_references(&available_stable_envs)?;
-        }
         
         // Determine which unit(s) to deploy
         let units_to_deploy = if let Some(ref unit_name) = options.unit_name {
@@ -159,7 +156,7 @@ impl DeployCommand {
 
         // Print environment resolution if verbose
         if options.verbose {
-            self.print_environment_resolution(&deployment_order, &environment_resolver, &options.environment_overrides)?;
+            self.print_environment_resolution(&deployment_order, &environment_resolver, &options.environment_overrides, &options.env_id, &discovery.registry)?;
         }
 
         // Deploy each unit in order
@@ -179,6 +176,7 @@ impl DeployCommand {
                 &environment_resolver,
                 &options.environment_overrides,
                 &options,
+                &discovery.registry,
             ).await?;
         }
         
@@ -187,6 +185,23 @@ impl DeployCommand {
         Ok(())
     }
     
+    /// Resolve the environment to use for a dependency
+    /// Priority: CLI override > same as current deployment
+    fn resolve_dependency_environment(
+        &self,
+        dep_unit_name: &str,
+        environment_overrides: &HashMap<String, String>,
+        default_env: &str,
+    ) -> Result<String> {
+        // Check if there's a CLI override using the unit name
+        if let Some(override_env) = environment_overrides.get(dep_unit_name) {
+            Ok(override_env.clone())
+        } else {
+            // Default to same environment as current deployment
+            Ok(default_env.to_string())
+        }
+    }
+
     async fn deploy_unit(
         &self,
         unit: &DiscoveredUnit,
@@ -195,21 +210,45 @@ impl DeployCommand {
         environment_resolver: &EnvironmentResolver,
         environment_overrides: &HashMap<String, String>,
         options: &DeployOptions,
+        unit_registry: &UnitRegistry,
     ) -> Result<()> {
         println!("  📍 Path: {}", unit.path.display());
         println!("  🏷️  Type: {:?}", unit.config.unit_type);
         println!("  💾 State: {:?}", unit.config.state_management);
-        
+
         // Get the full path to the unit
         let unit_path = project_root.join(&unit.path);
-        
+
         // Convert dependencies to the format expected by TerraformGenerator
-        let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.dependencies.iter().map(|dep| {
-            crate::common::service_config::DependencyReference {
-                path: dep.path.clone(),
-                environment: dep.environment.clone(),
-            }
-        }).collect();
+        let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.dependencies.iter().map(|dep| -> Result<_> {
+            // Resolve dependency to get path and unit name
+            let (dep_path, dep_unit_name) = if let Some(name) = dep.name() {
+                // Name-based dependency - look up the unit to get its path
+                if let Some(dep_unit) = unit_registry.get_unit(name) {
+                    (dep_unit.path.to_string_lossy().to_string(), name.clone())
+                } else {
+                    return Err(EnvieError::ValidationError(
+                        format!("Dependency unit '{}' not found", name)
+                    ));
+                }
+            } else if let Some(path) = dep.path() {
+                // Path-based dependency - extract unit name from path
+                let (service, _) = self.extract_service_module_from_path(path)?;
+                (path.clone(), service)
+            } else {
+                return Err(EnvieError::ValidationError(
+                    "Dependency must have either 'name' or 'path'".to_string()
+                ));
+            };
+
+            let environment = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, &options.env_id)
+                .unwrap_or_else(|_| options.env_id.clone());
+
+            Ok(crate::common::service_config::DependencyReference {
+                path: dep_path,
+                environment,
+            })
+        }).collect::<Result<Vec<_>>>()?;
         
         // Generate Terraform files
         let generator = TerraformGenerator::new();
@@ -217,7 +256,7 @@ impl DeployCommand {
         generator.write_generated_files(
             &unit_path,
             &dependencies,
-            &self.convert_unit_to_module_config(unit),
+            &self.convert_unit_to_module_config(unit, environment_overrides, &options.env_id, unit_registry),
             environment_resolver,
             environment_overrides,
             &unit.config.name,
@@ -317,6 +356,8 @@ impl DeployCommand {
         deployment_order: &[&DiscoveredUnit],
         environment_resolver: &EnvironmentResolver,
         environment_overrides: &HashMap<String, String>,
+        env_id: &str,
+        unit_registry: &UnitRegistry,
     ) -> Result<()> {
         self.output_manager.print_blue("\n🔍 Resolving dependencies:\n");
 
@@ -328,30 +369,42 @@ impl DeployCommand {
                     let is_last = i == unit.config.dependencies.len() - 1;
                     let prefix = if is_last { "  └─" } else { "  ├─" };
 
-                    // Extract service name from path for override lookup
-                    let (source_service, _) = self.extract_service_module_from_path(&dep.path)?;
-
-                    // Check if there's a CLI override
-                    let environment_to_use = if let Some(override_env) = environment_overrides.get(&source_service) {
-                        override_env.clone()
+                    // Resolve dependency to get unit name and display path
+                    let (dep_display, dep_unit_name) = if let Some(name) = dep.name() {
+                        (name.clone(), name.clone())
+                    } else if let Some(path) = dep.path() {
+                        let (service, _) = self.extract_service_module_from_path(path)?;
+                        (path.clone(), service)
                     } else {
-                        dep.environment.clone()
+                        continue;
                     };
+
+                    // Resolve environment for this dependency
+                    let environment_to_use = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, env_id)?;
 
                     let resolved_env = environment_resolver.resolve_environment(&environment_to_use)?;
 
                     // Show if environment was overridden
-                    let override_info = if environment_overrides.contains_key(&source_service) {
-                        format!(" (overridden from '{}')", dep.environment)
+                    let override_info = if environment_overrides.contains_key(&dep_unit_name) {
+                        format!(" (overridden from default '{}')", env_id)
                     } else {
                         String::new()
                     };
 
-                    println!("{}  {} → {}{}", prefix, dep.path, environment_to_use, override_info);
+                    println!("{}  {} → {}{}", prefix, dep_display, environment_to_use, override_info);
                     println!("  │     Workspace: {}", resolved_env.workspace);
 
-                    // Generate state key for display
-                    let (_, source_module) = self.extract_service_module_from_path(&dep.path)?;
+                    // Generate state key for display - need to get the actual unit to get its path
+                    let dep_unit = unit_registry.get_unit(&dep_unit_name);
+                    let (source_service, source_module) = if let Some(unit) = dep_unit {
+                        // Extract from unit path
+                        let path_str = unit.path.to_string_lossy();
+                        let (service, module) = self.extract_service_module_from_path(&path_str)?;
+                        (service, module)
+                    } else {
+                        // Fallback to unit name
+                        (dep_unit_name.clone(), String::new())
+                    };
                     let state_key = environment_resolver.generate_state_key(&resolved_env, &source_service, &source_module);
 
                     if let Some(bucket) = resolved_env.backend.config.get("bucket") {
@@ -388,14 +441,18 @@ impl DeployCommand {
             if !unit.config.dependencies.is_empty() {
                 has_dependencies = true;
                 for dep in &unit.config.dependencies {
-                    let (source_service, _) = self.extract_service_module_from_path(&dep.path)?;
-                    let environment_to_use = if let Some(override_env) = environment_overrides.get(&source_service) {
-                        override_env.clone()
+                    let (dep_display, dep_unit_name) = if let Some(name) = dep.name() {
+                        (name.clone(), name.clone())
+                    } else if let Some(path) = dep.path() {
+                        let (service, _) = self.extract_service_module_from_path(path)?;
+                        (path.clone(), service)
                     } else {
-                        dep.environment.clone()
+                        continue;
                     };
+                    
+                    let environment_to_use = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, env_id)?;
                     let resolved_env = environment_resolver.resolve_environment(&environment_to_use)?;
-                    println!("  ✓ {} → {} ({})", dep.path, environment_to_use, resolved_env.workspace);
+                    println!("  ✓ {} → {} ({})", dep_display, environment_to_use, resolved_env.workspace);
                 }
             }
         }
@@ -460,16 +517,38 @@ impl DeployCommand {
         }
     }
     
-    fn convert_unit_to_module_config(&self, unit: &DiscoveredUnit) -> ModuleConfig {
+    fn convert_unit_to_module_config(&self, unit: &DiscoveredUnit, environment_overrides: &HashMap<String, String>, default_env: &str, unit_registry: &UnitRegistry) -> ModuleConfig {
         // Convert UnitConfig to ModuleConfig for backward compatibility with TerraformGenerator
         ModuleConfig {
             name: unit.config.name.clone(),
             description: unit.config.description.clone(),
             path: unit.path.to_string_lossy().to_string(),
             dependencies: unit.config.dependencies.iter().map(|dep| {
+                let (dep_path, dep_unit_name) = if let Some(name) = dep.name() {
+                    if let Some(dep_unit) = unit_registry.get_unit(name) {
+                        (dep_unit.path.to_string_lossy().to_string(), name.clone())
+                    } else {
+                        return crate::common::service_config::DependencyReference {
+                            path: format!("units/{}", name),
+                            environment: default_env.to_string(),
+                        };
+                    }
+                } else if let Some(path) = dep.path() {
+                    let (service, _) = self.extract_service_module_from_path(path).unwrap_or(("unknown".to_string(), String::new()));
+                    (path.clone(), service)
+                } else {
+                    return crate::common::service_config::DependencyReference {
+                        path: "unknown".to_string(),
+                        environment: default_env.to_string(),
+                    };
+                };
+
+                let environment = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, default_env)
+                    .unwrap_or_else(|_| default_env.to_string());
+
                 crate::common::service_config::DependencyReference {
-                    path: dep.path.clone(),
-                    environment: dep.environment.clone(),
+                    path: dep_path,
+                    environment,
                 }
             }).collect(),
             state_management: self.convert_state_management(&unit.config.state_management),

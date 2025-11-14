@@ -94,6 +94,9 @@ module "lambda_function" {
     }
   }
 
+  # Disable current version triggers (AWS doesn't support permissions for $LATEST)
+  create_current_version_allowed_triggers = false
+
   tags = {
     Name = "${local.envie_project_name}-${local.envie_environment_id}-items-api"
   }

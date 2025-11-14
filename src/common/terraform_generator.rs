@@ -125,6 +125,8 @@ impl TerraformGenerator {
         // e.g., "../core" -> ("core", "")
         // e.g., "../database/modules/dynamodb" -> ("database", "dynamodb")
         // e.g., "./lambda" -> ("current", "lambda")
+        // e.g., "units/api" -> ("api", "")  (handle full paths from name-based deps)
+        // e.g., "units/core" -> ("core", "")
 
         let normalized_source = source
             .replace("../", "")
@@ -133,7 +135,16 @@ impl TerraformGenerator {
 
         let parts: Vec<&str> = normalized_source.split('/').filter(|s| !s.is_empty()).collect();
 
-        if parts.len() >= 2 {
+        // Handle full paths like "units/api" or "units/core" (from name-based dependencies)
+        if parts.len() >= 2 && parts[0] == "units" {
+            // Path like "units/api" -> extract "api" as the unit name
+            if parts.len() == 2 {
+                Ok((parts[1].to_string(), String::new()))
+            } else {
+                // Path like "units/database/modules/dynamodb" -> ("database", "dynamodb")
+                Ok((parts[1].to_string(), parts[parts.len() - 1].to_string()))
+            }
+        } else if parts.len() >= 2 {
             // Multi-part path: first part is unit, last part is sub-module
             let unit = parts[0].to_string();
             let module = parts[parts.len() - 1].to_string();

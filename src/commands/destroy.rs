@@ -118,7 +118,8 @@ impl DestroyCommand {
         if !unit.config.dependencies.is_empty() {
             println!("⚠️  Note: This unit has dependencies:");
             for dep in &unit.config.dependencies {
-                println!("    - {}", dep.path);
+                let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                println!("    - {}", dep_display);
             }
             println!("    Dependencies will NOT be destroyed automatically.");
             println!();
@@ -142,7 +143,8 @@ impl DestroyCommand {
             if !unit.config.dependencies.is_empty() {
                 println!("     Dependencies:");
                 for dep in &unit.config.dependencies {
-                    println!("       - {}", dep.path);
+                    let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                    println!("       - {}", dep_display);
                 }
             }
             println!();

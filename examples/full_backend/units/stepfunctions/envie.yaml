@@ -1,0 +1,12 @@
+name: stepfunctions
+description: Step Functions workflow that orchestrates API calls
+unit_type: service
+
+# Dependencies using unit names instead of paths
+dependencies:
+  - name: api
+  - name: core
+
+# Dedicated state for Step Functions
+state_management: dedicated
+

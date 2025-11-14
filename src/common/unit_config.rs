@@ -58,16 +58,50 @@ impl Default for UnitType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DependencyReference {
-    /// Relative path to the dependency (e.g., "../networking/vpc", "./auth")
-    pub path: String,
-    
-    /// Environment to use for this dependency
-    pub environment: String,
-    
-    /// Optional alias for the dependency
-    #[serde(default)]
-    pub alias: Option<String>,
+#[serde(untagged)]
+pub enum DependencyReference {
+    /// Path-based dependency (legacy format)
+    Path {
+        /// Relative path to the dependency (e.g., "../networking/vpc", "./auth")
+        path: String,
+        /// Optional alias for the dependency
+        #[serde(default)]
+        alias: Option<String>,
+    },
+    /// Name-based dependency (new format)
+    Name {
+        /// Unit name of the dependency (e.g., "api", "core", "db")
+        name: String,
+        /// Optional alias for the dependency
+        #[serde(default)]
+        alias: Option<String>,
+    },
+}
+
+impl DependencyReference {
+    /// Get the path if this is a path-based dependency
+    pub fn path(&self) -> Option<&String> {
+        match self {
+            DependencyReference::Path { path, .. } => Some(path),
+            DependencyReference::Name { .. } => None,
+        }
+    }
+
+    /// Get the name if this is a name-based dependency
+    pub fn name(&self) -> Option<&String> {
+        match self {
+            DependencyReference::Path { .. } => None,
+            DependencyReference::Name { name, .. } => Some(name),
+        }
+    }
+
+    /// Get the alias if present
+    pub fn alias(&self) -> Option<&String> {
+        match self {
+            DependencyReference::Path { alias, .. } => alias.as_ref(),
+            DependencyReference::Name { alias, .. } => alias.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,36 +190,7 @@ impl StateManagement {
 }
 
 impl UnitConfig {
-    /// Validate environment references in dependencies
-    /// Returns Ok if all environment references are valid, or an error with details
-    pub fn validate_environment_references(&self, available_stable_envs: &[String]) -> crate::common::Result<()> {
-        for dep in &self.dependencies {
-            let env = &dep.environment;
-
-            // Check if it's a valid environment reference
-            if env.starts_with("stable.") {
-                let env_name = env.strip_prefix("stable.").unwrap();
-                if !available_stable_envs.contains(&env_name.to_string()) {
-                    return Err(crate::common::EnvieError::ValidationError(format!(
-                        "Invalid stable environment '{}' in unit '{}' dependency on '{}'\n\n\
-                         Available stable environments:\n{}\n\n\
-                         Available ephemeral formats:\n  • ephemeral (current deployment environment)\n  • ephemeral.<id> (specific ephemeral environment)",
-                        env,
-                        self.name,
-                        dep.path,
-                        available_stable_envs.iter().map(|e| format!("  • stable.{}", e)).collect::<Vec<_>>().join("\n")
-                    )));
-                }
-            } else if env == "ephemeral" || env.starts_with("ephemeral.") {
-                // Valid ephemeral reference
-            } else {
-                // Direct workspace reference - we can't validate these at parse time
-                // They will be validated at resolution time
-            }
-        }
-
-        Ok(())
-    }
+    // Future validation methods can go here
 }
 
 /// A discovered unit in the project
