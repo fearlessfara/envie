@@ -20,6 +20,7 @@ pub struct TerraformState {
 pub struct TerraformManager {
     working_directory: std::path::PathBuf,
     verbose: bool,
+    output_prefix: Option<String>,
 }
 
 impl TerraformManager {
@@ -27,11 +28,17 @@ impl TerraformManager {
         Self {
             working_directory: working_directory.as_ref().to_path_buf(),
             verbose: false,
+            output_prefix: None,
         }
     }
 
     pub fn with_verbose(mut self, verbose: bool) -> Self {
         self.verbose = verbose;
+        self
+    }
+
+    pub fn with_output_prefix(mut self, prefix: Option<String>) -> Self {
+        self.output_prefix = prefix;
         self
     }
 
@@ -43,12 +50,20 @@ impl TerraformManager {
         self.run_command("init", &["-upgrade"], false)
     }
 
-    pub fn init_with_backend_config(&self, backend_config: &[(&str, &str)]) -> Result<()> {
-        let mut args = vec![];
-        for (key, value) in backend_config {
-            args.push(format!("-backend-config={}={}", key, value));
+    pub fn init_with_backend_config(&self, backend_config: &[(&str, &str)], reconfigure: bool) -> Result<()> {
+        let mut arg_strings: Vec<String> = Vec::new();
+        
+        // Add -reconfigure flag if requested
+        if reconfigure {
+            arg_strings.push("-reconfigure".to_string());
         }
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        
+        // Add backend config arguments
+        for (key, value) in backend_config {
+            arg_strings.push(format!("-backend-config={}={}", key, value));
+        }
+        
+        let arg_refs: Vec<&str> = arg_strings.iter().map(|s| s.as_str()).collect();
         self.run_command("init", &arg_refs, false)
     }
 
@@ -147,22 +162,58 @@ impl TerraformManager {
         cmd.env("GODEBUG", "asyncpreemptoff=1");
 
         if self.verbose {
-            println!(">> Running: terraform {} {}", command, args.join(" "));
-            // In verbose mode, inherit stdout/stderr to show terraform output
-            let status = cmd.status();
-            match status {
-                Ok(status) => {
-                    if status.success() {
-                        Ok(())
-                    } else {
-                        Err(crate::common::EnvieError::TerraformError(
-                            format!("terraform {} failed with exit code: {}", command, status)
-                        ))
+            if let Some(ref prefix) = self.output_prefix {
+                println!("[{}] >> Running: terraform {} {}", prefix, command, args.join(" "));
+            } else {
+                println!(">> Running: terraform {} {}", command, args.join(" "));
+            }
+            
+            // If we have an output prefix, capture and prefix output lines
+            if self.output_prefix.is_some() {
+                let output = cmd.output();
+                match output {
+                    Ok(output) => {
+                        let prefix = self.output_prefix.as_ref().unwrap();
+                        // Print stdout with prefix
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        for line in stdout.lines() {
+                            println!("[{}] {}", prefix, line);
+                        }
+                        // Print stderr with prefix
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        for line in stderr.lines() {
+                            eprintln!("[{}] {}", prefix, line);
+                        }
+                        
+                        if output.status.success() {
+                            Ok(())
+                        } else {
+                            Err(crate::common::EnvieError::TerraformError(
+                                format!("terraform {} failed with exit code: {}", command, output.status)
+                            ))
+                        }
                     }
+                    Err(e) => Err(crate::common::EnvieError::ProcessError(
+                        format!("Failed to execute terraform {}: {}", command, e)
+                    )),
                 }
-                Err(e) => Err(crate::common::EnvieError::ProcessError(
-                    format!("Failed to execute terraform {}: {}", command, e)
-                )),
+            } else {
+                // In verbose mode without prefix, inherit stdout/stderr to show terraform output
+                let status = cmd.status();
+                match status {
+                    Ok(status) => {
+                        if status.success() {
+                            Ok(())
+                        } else {
+                            Err(crate::common::EnvieError::TerraformError(
+                                format!("terraform {} failed with exit code: {}", command, status)
+                            ))
+                        }
+                    }
+                    Err(e) => Err(crate::common::EnvieError::ProcessError(
+                        format!("Failed to execute terraform {}: {}", command, e)
+                    )),
+                }
             }
         } else {
             // In non-verbose mode, capture output

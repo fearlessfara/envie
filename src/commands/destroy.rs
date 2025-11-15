@@ -1,5 +1,7 @@
 use crate::common::*;
+use crate::common::environment::EnvironmentConfig;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct DestroyOptions {
@@ -85,8 +87,32 @@ impl DestroyCommand {
             return Ok(());
         }
 
-        self.output_manager.print_green(&format!("🗑️  Destroying {} unit(s) for environment: {}\n", units_to_destroy.len(), env_id));
+        self.output_manager.section_header(&format!("Destroying {} unit(s) for environment: {}", units_to_destroy.len(), env_id));
 
+        // Load environment config to get backend values
+        let environment_config = self.load_environment_config(&project_root)?;
+        let resolved_env = crate::common::environment::EnvironmentResolver::new(
+            workspace.clone(),
+            project_name.clone(),
+            environment_config.clone(),
+        ).resolve_environment("ephemeral")?;
+
+        // Validate required backend config values exist
+        let region = resolved_env.backend.config.get("region")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: region".to_string()))?;
+        let bucket = resolved_env.backend.config.get("bucket")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: bucket".to_string()))?;
+        let dynamodb_table = resolved_env.backend.config.get("dynamodb_table")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: dynamodb_table".to_string()))?;
+
+        // Prepare terraform variables
+        let mut terraform_vars: Vec<(String, String)> = Vec::new();
+        terraform_vars.push(("envie_workspace".to_string(), workspace.clone()));
+        terraform_vars.push(("envie_backend_region".to_string(), region.clone()));
+        terraform_vars.push(("envie_backend_bucket".to_string(), bucket.clone()));
+        terraform_vars.push(("envie_backend_dynamodb_table".to_string(), dynamodb_table.clone()));
+
+        let units_count = units_to_destroy.len();
         for unit in units_to_destroy {
             // Check if workspace exists for this unit
             let unit_path = project_root.join(&unit.path);
@@ -94,13 +120,14 @@ impl DestroyCommand {
                 .with_verbose(options.verbose);
 
             if terraform_manager.workspace_list()?.contains(&workspace) {
-                self.destroy_unit(unit, &project_root, &workspace, options.verbose).await?;
+                self.destroy_unit(unit, &project_root, &workspace, &terraform_vars, options.verbose).await?;
             } else if options.verbose {
-                println!("⏭️  Skipping unit '{}' - workspace '{}' does not exist\n", unit.config.name, workspace);
+                self.output_manager.warning(&format!("Skipping unit '{}' - workspace '{}' does not exist", unit.config.name, workspace));
             }
         }
 
-        self.output_manager.print_green(&format!("\n✅ Successfully destroyed {} unit(s) for workspace: {}", units_to_destroy_unordered.len(), workspace));
+        self.output_manager.section_header("Destroy complete");
+        self.output_manager.success(&format!("Destroyed {} unit(s) for workspace: {}", units_count, workspace));
 
         Ok(())
     }
@@ -167,33 +194,46 @@ impl DestroyCommand {
         unit: &DiscoveredUnit,
         project_root: &PathBuf,
         workspace: &str,
+        terraform_vars: &[(String, String)],
         verbose: bool,
     ) -> Result<()> {
-        println!("🗑️  Destroying unit: {}", unit.config.name);
-        println!("  📍 Path: {}", unit.path.display());
-        println!("  🌍 Workspace: {}", workspace);
+        self.output_manager.unit_prefix(&unit.config.name, "Destroying");
+        if verbose {
+            self.output_manager.unit_prefix(&unit.config.name, &format!("Path: {}", unit.path.display()));
+            self.output_manager.unit_prefix(&unit.config.name, &format!("Workspace: {}", workspace));
+        }
 
         let unit_path = project_root.join(&unit.path);
         let terraform_manager = TerraformManager::new(&unit_path)
             .with_verbose(verbose);
         
         // Select the workspace
-        println!("  🔧 Selecting workspace...");
+        if verbose {
+            self.output_manager.unit_prefix(&unit.config.name, "Selecting workspace");
+        }
         terraform_manager.workspace_select(workspace)?;
         
-        // Destroy terraform resources
-        println!("  💥 Running terraform destroy...");
-        terraform_manager.destroy(&[])?;
+        // Destroy terraform resources with required variables
+        if verbose {
+            self.output_manager.unit_prefix(&unit.config.name, "Running terraform destroy");
+        }
+        let vars_refs: Vec<(&str, &str)> = terraform_vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        terraform_manager.destroy(&vars_refs)?;
         
         // Switch back to default workspace
-        println!("  🔧 Switching to default workspace...");
+        if verbose {
+            self.output_manager.unit_prefix(&unit.config.name, "Switching to default workspace");
+        }
         terraform_manager.workspace_select("default")?;
         
         // Delete the workspace
-        println!("  🗑️  Deleting workspace...");
+        if verbose {
+            self.output_manager.unit_prefix(&unit.config.name, "Deleting workspace");
+        }
         terraform_manager.workspace_delete(workspace)?;
         
-        println!("  ✅ Unit destroyed successfully\n");
+        self.output_manager.unit_prefix(&unit.config.name, "Destroyed successfully");
+        self.output_manager.print_msg("");
         
         Ok(())
     }
@@ -227,6 +267,45 @@ impl DestroyCommand {
         Ok(config.project.as_ref()
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "envie-project".to_string()))
+    }
+    
+    fn load_environment_config(&self, project_root: &PathBuf) -> Result<EnvironmentConfig> {
+        let workspace_file = project_root.join("workspace.envie.yaml");
+        if !workspace_file.exists() {
+            // Return default config
+            return Ok(EnvironmentConfig {
+                project: None,
+                ephemeral: crate::common::environment::EphemeralConfig {
+                    naming_pattern: "{project}-{id}".to_string(),
+                    backend: crate::common::environment::BackendConfig {
+                        backend_type: "local".to_string(),
+                        config: HashMap::new(),
+                    },
+                },
+                stable: HashMap::new(),
+            });
+        }
+
+        let content = std::fs::read_to_string(&workspace_file)?;
+        let config: crate::common::service_config::WorkspaceConfig = serde_yaml::from_str(&content)?;
+        
+        // Use environments from workspace config if available
+        if let Some(env_config) = config.environments {
+            Ok(env_config)
+        } else {
+            // Fallback to default
+            Ok(EnvironmentConfig {
+                project: config.project.clone(),
+                ephemeral: crate::common::environment::EphemeralConfig {
+                    naming_pattern: "{project}-{id}".to_string(),
+                    backend: crate::common::environment::BackendConfig {
+                        backend_type: "local".to_string(),
+                        config: HashMap::new(),
+                    },
+                },
+                stable: HashMap::new(),
+            })
+        }
     }
 }
 

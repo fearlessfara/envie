@@ -55,6 +55,10 @@ pub enum Commands {
         /// Print detailed output during execution
         #[arg(long)]
         verbose: bool,
+        
+        /// Reconfigure backend if configuration has changed (use when state key changes)
+        #[arg(long)]
+        reconfigure: bool,
     },
     /// Destroy the environment for a specific unit
     Destroy {

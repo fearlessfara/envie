@@ -29,6 +29,45 @@ impl OutputManager {
         self.print_msg(&msg.yellow().to_string());
     }
 
+    pub fn print_red(&self, msg: &str) {
+        self.print_msg(&msg.red().to_string());
+    }
+
+    pub fn print_cyan(&self, msg: &str) {
+        self.print_msg(&msg.cyan().to_string());
+    }
+
+    pub fn print_bold(&self, msg: &str) {
+        self.print_msg(&msg.bold().to_string());
+    }
+
+    pub fn section_header(&self, title: &str) {
+        self.print_cyan(&format!("\n▶ {}", title));
+    }
+
+    pub fn success(&self, msg: &str) {
+        self.print_green(&format!("✓ {}", msg));
+    }
+
+    pub fn info(&self, msg: &str) {
+        self.print_blue(&format!("ℹ {}", msg));
+    }
+
+    pub fn warning(&self, msg: &str) {
+        self.print_yellow(&format!("⚠ {}", msg));
+    }
+
+    pub fn error(&self, msg: &str) {
+        self.print_red(&format!("✗ {}", msg));
+    }
+
+    pub fn progress(&self, current: usize, total: usize, unit: &str) {
+        self.print_cyan(&format!("[{}/{}] {}", current, total, unit));
+    }
+
+    pub fn unit_prefix(&self, unit: &str, msg: &str) {
+        self.print_blue(&format!("[{}] {}", unit, msg));
+    }
 }
 
 impl Default for OutputManager {

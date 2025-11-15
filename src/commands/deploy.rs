@@ -3,6 +3,7 @@ use crate::common::environment::{EnvironmentConfig, EphemeralConfig, BackendConf
 use crate::common::service_config::WorkspaceConfig;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use regex::Regex;
 
 #[derive(Debug, Clone)]
 pub struct DeployOptions {
@@ -12,6 +13,7 @@ pub struct DeployOptions {
     pub dry_run: bool,
     pub no_prompt: bool,
     pub verbose: bool,
+    pub reconfigure: bool,
 }
 
 pub struct DeployCommand {
@@ -113,6 +115,9 @@ impl DeployCommand {
             }
         };
         
+        // Validate environment ID to prevent path traversal
+        self.validate_env_id(&options.env_id)?;
+        
         // Resolve workspace name
         let project_name = self.get_project_name()?;
         let workspace = format!("{}-{}", project_name, options.env_id);
@@ -129,7 +134,10 @@ impl DeployCommand {
             environment_config.clone(),
         ).with_available_workspaces(self.get_available_workspaces()?);
 
-        // Resolve deployment order (dependencies first)
+        // Clone registry early to avoid lifetime issues
+        let registry = discovery.registry.clone();
+
+        // Resolve deployment order (dependencies first) - must be done before cloning registry
         let deployment_order = if units_to_deploy.len() == 1 {
             // Single unit - resolve its dependencies
             discovery.resolve_deployment_order(&units_to_deploy[0].config.name)?
@@ -146,6 +154,12 @@ impl DeployCommand {
                 .collect()
         };
 
+        // Group units by dependency level for parallel deployment - must be done before cloning registry
+        let deployment_levels = discovery.group_units_by_level(&deployment_order)?;
+        
+        // Clone registry after we're done using discovery
+        let registry = discovery.registry.clone();
+
         if options.dry_run {
             self.print_deployment_plan(&deployment_order, &environment_resolver, &options.environment_overrides, &options.env_id)?;
             return Ok(());
@@ -156,31 +170,109 @@ impl DeployCommand {
 
         // Print environment resolution if verbose
         if options.verbose {
-            self.print_environment_resolution(&deployment_order, &environment_resolver, &options.environment_overrides, &options.env_id, &discovery.registry)?;
+            self.print_environment_resolution(&deployment_order, &environment_resolver, &options.environment_overrides, &options.env_id, &registry)?;
         }
+        let total_units = deployment_order.len();
+        
+        self.output_manager.section_header(&format!("Deploying {} unit(s)", total_units));
+        
+        let mut deployed_count = 0;
+        
+        for level in deployment_levels.iter() {
+            if level.len() == 1 {
+                // Single unit in this level - deploy sequentially for cleaner output
+                deployed_count += 1;
+                self.output_manager.progress(deployed_count, total_units, &level[0].config.name);
 
-        // Deploy each unit in order
-        self.output_manager.print_green(&format!("\n🚀 Deploying {} unit(s)...\n", deployment_order.len()));
-        
-        for (index, unit) in deployment_order.iter().enumerate() {
-            self.output_manager.print_blue(&format!("[{}/{}] Deploying: {}", 
-                index + 1, 
-                deployment_order.len(), 
-                unit.config.name
-            ));
-            
-            self.deploy_unit(
-                unit,
-                &project_root,
-                &workspace,
-                &environment_resolver,
-                &options.environment_overrides,
-                &options,
-                &discovery.registry,
-            ).await?;
+                self.deploy_unit(
+                    level[0],
+                    &project_root,
+                    &workspace,
+                    &environment_resolver,
+                    &options.environment_overrides,
+                    &options,
+                    &registry,
+                ).await?;
+            } else {
+                // Multiple units in this level - deploy in parallel
+                // Show progress for all units first
+                for unit in level {
+                    deployed_count += 1;
+                    self.output_manager.progress(deployed_count, total_units, &unit.config.name);
+                }
+                
+                // Deploy all units in this level in parallel using tokio::spawn
+                let mut tasks = Vec::new();
+                let mut task_count = 0;
+                for unit in level {
+                    task_count += 1;
+                    // Look up unit from registry to avoid borrowing from discovery
+                    let unit_name = unit.config.name.clone();
+                    let unit_from_registry = registry.get_unit(&unit_name)
+                        .ok_or_else(|| EnvieError::ValidationError(format!("Unit '{}' not found in registry", unit_name)))?;
+                    let unit_clone = unit_from_registry.clone();
+                    let project_root_clone = project_root.clone();
+                    let workspace_clone = workspace.clone();
+                    let env_resolver = environment_resolver.clone();
+                    let env_overrides = options.environment_overrides.clone();
+                    let options_clone = options.clone();
+                    let registry_clone = registry.clone();
+                    let working_dir = self.working_directory.clone();
+                    
+                    let task = tokio::spawn(async move {
+                        Self::deploy_unit_parallel(
+                            &unit_clone,
+                            &project_root_clone,
+                            &workspace_clone,
+                            &env_resolver,
+                            &env_overrides,
+                            &options_clone,
+                            &registry_clone,
+                            &working_dir,
+                        ).await
+                    });
+                    tasks.push(task);
+                }
+                
+                // Wait for all parallel deployments to complete and collect errors
+                let mut errors = Vec::new();
+                let mut completed = 0;
+                for task in tasks {
+                    match task.await {
+                        Ok(Ok(())) => {
+                            completed += 1;
+                        },
+                        Ok(Err(e)) => {
+                            errors.push(e);
+                        },
+                        Err(e) => {
+                            errors.push(EnvieError::ProcessError(format!("Task join error: {}", e)));
+                        },
+                    }
+                }
+                
+                // Report all errors if any occurred
+                if !errors.is_empty() {
+                    if errors.len() == 1 {
+                        return Err(errors.into_iter().next().unwrap());
+                    } else {
+                        let error_msg = errors.iter()
+                            .map(|e| format!("  - {}", e))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        return Err(EnvieError::ValidationError(
+                            format!("Multiple units failed during parallel deployment:\n{}", error_msg)
+                        ));
+                    }
+                }
+                
+                // Progress already shown above, just mark completion
+                deployed_count += level.len();
+            }
         }
         
-        self.output_manager.print_green("\n✅ Deployment complete!");
+        self.output_manager.section_header("Deployment complete");
+        self.output_manager.success(&format!("All {} unit(s) deployed successfully", total_units));
         
         Ok(())
     }
@@ -202,8 +294,8 @@ impl DeployCommand {
         }
     }
 
-    async fn deploy_unit(
-        &self,
+    /// Deploy a unit (can be called in parallel)
+    async fn deploy_unit_parallel(
         unit: &DiscoveredUnit,
         project_root: &PathBuf,
         workspace: &str,
@@ -211,13 +303,21 @@ impl DeployCommand {
         environment_overrides: &HashMap<String, String>,
         options: &DeployOptions,
         unit_registry: &UnitRegistry,
+        working_directory: &PathBuf,
     ) -> Result<()> {
-        println!("  📍 Path: {}", unit.path.display());
-        println!("  🏷️  Type: {:?}", unit.config.unit_type);
-        println!("  💾 State: {:?}", unit.config.state_management);
+        let unit_name = &unit.config.name;
+        let output_manager = OutputManager::new();
+        if options.verbose {
+            output_manager.unit_prefix(unit_name, &format!("Path: {}", unit.path.display()));
+            output_manager.unit_prefix(unit_name, &format!("Type: {:?}", unit.config.unit_type));
+            output_manager.unit_prefix(unit_name, &format!("State: {:?}", unit.config.state_management));
+        }
 
         // Get the full path to the unit
         let unit_path = project_root.join(&unit.path);
+
+        // Create a temporary DeployCommand for helper methods
+        let deploy_cmd = DeployCommand::new(working_directory.clone());
 
         // Convert dependencies to the format expected by TerraformGenerator
         let dependencies: Vec<crate::common::service_config::DependencyReference> = unit.config.dependencies.iter().map(|dep| -> Result<_> {
@@ -233,7 +333,7 @@ impl DeployCommand {
                 }
             } else if let Some(path) = dep.path() {
                 // Path-based dependency - extract unit name from path
-                let (service, _) = self.extract_service_module_from_path(path)?;
+                let (service, _) = deploy_cmd.extract_service_module_from_path(path)?;
                 (path.clone(), service)
             } else {
                 return Err(EnvieError::ValidationError(
@@ -241,7 +341,7 @@ impl DeployCommand {
                 ));
             };
 
-            let environment = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, &options.env_id)
+            let environment = deploy_cmd.resolve_dependency_environment(&dep_unit_name, environment_overrides, &options.env_id)
                 .unwrap_or_else(|_| options.env_id.clone());
 
             Ok(crate::common::service_config::DependencyReference {
@@ -252,11 +352,11 @@ impl DeployCommand {
         
         // Generate Terraform files
         let generator = TerraformGenerator::new();
-        let project_name = self.get_project_name()?;
+        let project_name = deploy_cmd.get_project_name()?;
         generator.write_generated_files(
             &unit_path,
             &dependencies,
-            &self.convert_unit_to_module_config(unit, environment_overrides, &options.env_id, unit_registry),
+            &deploy_cmd.convert_unit_to_module_config(unit, environment_overrides, &options.env_id, unit_registry),
             environment_resolver,
             environment_overrides,
             &unit.config.name,
@@ -267,7 +367,8 @@ impl DeployCommand {
         
         // Initialize and apply Terraform
         let terraform_manager = TerraformManager::new(&unit_path)
-            .with_verbose(options.verbose);
+            .with_verbose(options.verbose)
+            .with_output_prefix(Some(unit.config.name.clone()));
 
         // Prepare backend configuration and variables
         let resolved_env = environment_resolver.resolve_environment("ephemeral")?;
@@ -306,49 +407,63 @@ impl DeployCommand {
             backend_config.push((key.clone(), value.clone()));
         }
 
-        let backend_config_refs: Vec<(&str, &str)> = backend_config
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
+        // Run terraform init with backend config
+        let backend_config_refs: Vec<(&str, &str)> = backend_config.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        terraform_manager.init_with_backend_config(&backend_config_refs, options.reconfigure)?;
 
-        println!("  🔧 Running terraform init...");
-        terraform_manager.init_with_backend_config(&backend_config_refs)?;
-
-        // Create or select workspace
+        // Select or create workspace
         let workspaces = terraform_manager.workspace_list()?;
-        if workspaces.iter().any(|w| w == workspace) {
+        if workspaces.contains(&workspace.to_string()) {
             terraform_manager.workspace_select(workspace)?;
         } else {
             terraform_manager.workspace_new(workspace)?;
         }
 
-        // Prepare Terraform variables for apply
-        let mut tf_vars: Vec<(String, String)> = Vec::new();
+        // Prepare terraform variables
+        let mut terraform_vars: Vec<(String, String)> = Vec::new();
+        terraform_vars.push(("envie_workspace".to_string(), workspace.to_string()));
+        
+        // Validate required backend config values exist
+        let region = resolved_env.backend.config.get("region")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: region".to_string()))?;
+        let bucket = resolved_env.backend.config.get("bucket")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: bucket".to_string()))?;
+        let dynamodb_table = resolved_env.backend.config.get("dynamodb_table")
+            .ok_or_else(|| EnvieError::ValidationError("Missing required backend config: dynamodb_table".to_string()))?;
+        
+        terraform_vars.push(("envie_backend_region".to_string(), region.clone()));
+        terraform_vars.push(("envie_backend_bucket".to_string(), bucket.clone()));
+        terraform_vars.push(("envie_backend_dynamodb_table".to_string(), dynamodb_table.clone()));
 
-        // Add workspace variable
-        tf_vars.push(("envie_workspace".to_string(), workspace.to_string()));
+        // Run terraform apply
+        let terraform_vars_refs: Vec<(&str, &str)> = terraform_vars.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        terraform_manager.apply(&terraform_vars_refs)?;
 
-        // Add backend configuration variables (for remote state data sources)
-        for (key, value) in &resolved_env.backend.config {
-            if key == "key_pattern" {
-                continue;
-            }
-            tf_vars.push((format!("envie_backend_{}", key), value.clone()));
-        }
-
-        // Convert to the format expected by terraform_manager.apply
-        let tf_vars_refs: Vec<(&str, &str)> = tf_vars
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-
-        // Apply Terraform with variables
-        println!("  ⚡ Running terraform apply...");
-        terraform_manager.apply(&tf_vars_refs)?;
-
-        println!("  ✅ Unit deployed successfully\n");
+        output_manager.unit_prefix(unit_name, "Deployed successfully");
 
         Ok(())
+    }
+
+    async fn deploy_unit(
+        &self,
+        unit: &DiscoveredUnit,
+        project_root: &PathBuf,
+        workspace: &str,
+        environment_resolver: &EnvironmentResolver,
+        environment_overrides: &HashMap<String, String>,
+        options: &DeployOptions,
+        unit_registry: &UnitRegistry,
+    ) -> Result<()> {
+        Self::deploy_unit_parallel(
+            unit,
+            project_root,
+            workspace,
+            environment_resolver,
+            environment_overrides,
+            options,
+            unit_registry,
+            &self.working_directory,
+        ).await
     }
     
     fn print_environment_resolution(
@@ -425,17 +540,17 @@ impl DeployCommand {
         environment_overrides: &HashMap<String, String>,
         env_id: &str,
     ) -> Result<()> {
-        self.output_manager.print_green("📋 Deployment Plan (Dry Run)\n");
+        self.output_manager.section_header("Deployment Plan (Dry Run)");
 
         let project_name = self.get_project_name()?;
         let workspace = format!("{}-{}", project_name, env_id);
 
-        println!("Environment: {}", env_id);
-        println!("Workspace: {}", workspace);
-        println!();
+        self.output_manager.print_msg(&format!("  Environment: {}", env_id));
+        self.output_manager.print_msg(&format!("  Workspace:   {}", workspace));
+        self.output_manager.print_msg("");
 
         // Show dependency resolution
-        println!("Dependencies:");
+        self.output_manager.print_bold("  Dependencies:");
         let mut has_dependencies = false;
         for unit in deployment_order {
             if !unit.config.dependencies.is_empty() {
@@ -452,29 +567,29 @@ impl DeployCommand {
                     
                     let environment_to_use = self.resolve_dependency_environment(&dep_unit_name, environment_overrides, env_id)?;
                     let resolved_env = environment_resolver.resolve_environment(&environment_to_use)?;
-                    println!("  ✓ {} → {} ({})", dep_display, environment_to_use, resolved_env.workspace);
+                    self.output_manager.print_msg(&format!("    {} → {} ({})", dep_display, environment_to_use, resolved_env.workspace));
                 }
             }
         }
         if !has_dependencies {
-            println!("  (none)");
+            self.output_manager.print_msg("    (none)");
         }
-        println!();
+        self.output_manager.print_msg("");
 
-        println!("Deployment Order:");
+        self.output_manager.print_bold("  Deployment Order:");
         for (index, unit) in deployment_order.iter().enumerate() {
-            println!("  {}. {} ({:?})",
+            self.output_manager.print_msg(&format!("    {}. {} ({:?})",
                 index + 1,
                 unit.config.name,
                 unit.config.unit_type
-            );
-            println!("     Path: {}", unit.path.display());
-            println!("     State: {:?}", unit.config.state_management);
-            println!();
+            ));
+            self.output_manager.print_msg(&format!("       Path:  {}", unit.path.display()));
+            self.output_manager.print_msg(&format!("       State: {:?}", unit.config.state_management));
+            self.output_manager.print_msg("");
         }
 
-        println!("📊 Summary:");
-        println!("  Total units to deploy: {}", deployment_order.len());
+        self.output_manager.print_bold("  Summary:");
+        self.output_manager.print_msg(&format!("    Total units: {}", deployment_order.len()));
 
         // Count by type
         let mut type_counts: HashMap<String, usize> = HashMap::new();
@@ -565,6 +680,27 @@ impl DeployCommand {
             UnitSM::Shared(id) => ServiceSM::Shared(id.clone()),
             UnitSM::Group(id) => ServiceSM::Shared(id.clone()), // Map group to shared
         }
+    }
+    
+    fn validate_env_id(&self, env_id: &str) -> Result<()> {
+        // Allow alphanumeric characters, hyphens, underscores, and dots
+        // Prevent path traversal (../, ..\, etc.) and other dangerous characters
+        let re = Regex::new(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")?;
+        
+        if !re.is_match(env_id) {
+            return Err(EnvieError::ValidationError(
+                format!("Invalid environment ID '{}'. Environment IDs must contain only alphanumeric characters, hyphens, underscores, and dots. Path traversal characters (../, ..\\) are not allowed.", env_id)
+            ));
+        }
+        
+        // Additional check: explicitly reject path traversal patterns
+        if env_id.contains("..") || env_id.contains("/") || env_id.contains("\\") {
+            return Err(EnvieError::ValidationError(
+                format!("Invalid environment ID '{}'. Path traversal characters are not allowed.", env_id)
+            ));
+        }
+        
+        Ok(())
     }
     
     fn get_project_name(&self) -> Result<String> {

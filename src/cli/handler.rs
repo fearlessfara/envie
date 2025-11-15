@@ -40,6 +40,7 @@ impl CommandHandler {
                 dry_run,
                 no_prompt,
                 verbose,
+                reconfigure,
             } => {
                 let environments = self.parse_environments(environment)?;
                 
@@ -50,6 +51,7 @@ impl CommandHandler {
                     dry_run,
                     no_prompt,
                     verbose,
+                    reconfigure,
                 };
 
                 let deployer = DeployCommand::new(self.working_directory.clone());

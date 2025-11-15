@@ -338,6 +338,80 @@ impl UnitDiscovery {
         
         Ok(result)
     }
+
+    /// Group units by dependency level for parallel deployment
+    /// Returns a vector of levels, where each level contains units that can be deployed in parallel
+    pub fn group_units_by_level<'a>(&self, units: &[&'a DiscoveredUnit]) -> Result<Vec<Vec<&'a DiscoveredUnit>>> {
+        use std::collections::{HashMap, HashSet};
+        
+        // Build a map of unit names to their dependency sets
+        let mut unit_deps: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut unit_map: HashMap<String, &DiscoveredUnit> = HashMap::new();
+        
+        for unit in units {
+            unit_map.insert(unit.config.name.clone(), *unit);
+            let mut deps = HashSet::new();
+            
+            for dep in &unit.config.dependencies {
+                let dep_name = if let Some(name) = dep.name() {
+                    name.clone()
+                } else if let Some(path) = dep.path() {
+                    // Resolve path-based dependency using registry
+                    let from_dir = &unit.path;
+                    let dep_relative = from_dir.join(path);
+                    let dep_normalized = self.normalize_path(&dep_relative);
+                    if let Some(dep_unit) = self.registry.get_unit_by_path(&dep_normalized) {
+                        dep_unit.config.name.clone()
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                };
+                deps.insert(dep_name);
+            }
+            
+            unit_deps.insert(unit.config.name.clone(), deps);
+        }
+        
+        // Group units by level (units with no dependencies or all dependencies already in previous levels)
+        let mut levels: Vec<Vec<&DiscoveredUnit>> = Vec::new();
+        let mut deployed = HashSet::new();
+        let mut remaining: HashSet<String> = units.iter().map(|u| u.config.name.clone()).collect();
+        
+        while !remaining.is_empty() {
+            let mut current_level = Vec::new();
+            let mut to_remove = Vec::new();
+            
+            for unit_name in &remaining {
+                if let Some(unit) = unit_map.get(unit_name) {
+                    let deps = unit_deps.get(unit_name).cloned().unwrap_or_default();
+                    
+                    // Check if all dependencies are already deployed
+                    if deps.is_empty() || deps.iter().all(|dep| deployed.contains(dep)) {
+                        current_level.push(*unit);
+                        to_remove.push(unit_name.clone());
+                    }
+                }
+            }
+            
+            if current_level.is_empty() {
+                // Circular dependency or missing dependency
+                return Err(crate::common::EnvieError::ValidationError(
+                    format!("Cannot resolve deployment order. Remaining units: {:?}", remaining)
+                ));
+            }
+            
+            for unit_name in &to_remove {
+                deployed.insert(unit_name.clone());
+                remaining.remove(unit_name);
+            }
+            
+            levels.push(current_level);
+        }
+        
+        Ok(levels)
+    }
 }
 
 /// Helper function to create a new unit discovery
