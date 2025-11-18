@@ -35,6 +35,36 @@ Located in `tests/cli_tests.rs`. These test the CLI interface:
 
 **Current Status**: 14 passing
 
+### Init Tests (`cargo test --test init_tests`)
+Located in `tests/init_tests.rs`. These test the `envie init` command thoroughly:
+
+- **Basic Initialization**: Tests creating a new project with default settings
+- **Custom Configuration**: Tests initialization with custom name and description
+- **Directory Structure**: Tests creation of services/ directory and example services
+- **Service Structure**: Tests networking, database, and API service scaffolding
+- **YAML Validity**: Tests that generated workspace.envie.yaml is valid and well-formed
+- **Unit Configuration**: Tests that all example services have valid envie.yaml files
+- **Dependency Graph**: Tests that example services have correct dependencies
+- **Module Dependencies**: Tests that modules within services have correct dependencies
+- **Terraform Files**: Tests creation of example main.tf files in all modules
+- **State Management**: Tests correct state management configuration (Service vs Dedicated)
+- **.gitignore**: Tests creation and updating of .gitignore with Envie entries
+- **README**: Tests creation of helpful README.md with project documentation
+- **Verbose Mode**: Tests detailed output during initialization
+- **Re-initialization**: Tests behavior when initializing an already initialized project
+- **CLI Output**: Tests helpful and user-friendly command output
+
+**Current Status**: 18 passing
+
+**Key Features Tested**:
+- Creates complete project structure with 3 example services (networking, database, API)
+- Each service has properly configured modules with dependencies
+- Networking: VPC, subnets, security-groups (3 modules)
+- Database: DynamoDB, RDS (2 modules) - depends on networking
+- API: Lambda, step-functions, gateway (3 modules) - depends on database and networking
+- Valid YAML configuration files throughout
+- Proper dependency chain: networking → database → API
+
 ### Workspace Safety Tests (`cargo test --test workspace_safety_tests`)
 Located in `tests/workspace_safety_tests.rs`. These ensure safe workspace operations:
 
@@ -125,6 +155,9 @@ cargo test --test integration_tests
 # Run only CLI tests
 cargo test --test cli_tests
 
+# Run only init tests
+cargo test --test init_tests
+
 # Run only workspace safety tests
 cargo test --test workspace_safety_tests
 
@@ -140,8 +173,8 @@ cargo test --test e2e_terraform_validation_tests
 # Run only E2E Terraform syntax tests (works offline)
 cargo test --test e2e_terraform_syntax_tests
 
-# Run all new integration test suites
-cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
+# Run all integration test suites
+cargo test --test integration_tests --test cli_tests --test init_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -315,13 +348,14 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 
 ## Test Summary
 
-**Total Test Coverage**: 117 tests across 7 test suites
+**Total Test Coverage**: 135 tests across 8 test suites
 
 | Test Suite | Tests | Status | Purpose |
 |------------|-------|--------|---------|
 | Unit Tests | 34 | ✅ 34 passing | Test individual modules and functions |
 | Integration Tests | 8 | ✅ All passing | Test complete workflows |
 | CLI Tests | 14 | ✅ All passing | Test command-line interface |
+| **Init Tests** | **18** | **✅ All passing** | **Test project initialization command** |
 | Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
 | Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
 | Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |
