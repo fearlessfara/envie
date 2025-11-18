@@ -55,6 +55,58 @@ EXAMPLES:
         #[arg(long)]
         verbose: bool,
     },
+    /// Create a new unit (service) with scaffolding
+    #[command(after_help = "\
+EXAMPLES:
+    # Create a simple unit interactively
+    envie new myservice
+
+    # Create with specific template
+    envie new auth --template api
+    envie new network --template networking
+    envie new data --template database
+
+    # Create with custom modules
+    envie new myservice --template with-modules --module lambda --module gateway
+
+    # Create at custom path
+    envie new myservice --path custom/path/myservice
+
+    # Skip prompts
+    envie new myservice --no-prompt
+
+AVAILABLE TEMPLATES:
+    simple       - Simple unit with single main.tf
+    with-modules - Unit with example modules structure
+    networking   - Networking service (VPC, subnets, security groups)
+    database     - Database service (DynamoDB, RDS)
+    api          - API service (Lambda, API Gateway)
+    compute      - Compute service (Lambda functions)
+    ")]
+    New {
+        /// Name of the unit to create
+        name: String,
+
+        /// Template to use (simple, with-modules, networking, database, api, compute)
+        #[arg(long)]
+        template: Option<String>,
+
+        /// Path where the unit should be created (default: services/<name>)
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Module names to create (for with-modules template)
+        #[arg(long = "module", action = clap::ArgAction::Append)]
+        modules: Vec<String>,
+
+        /// Don't prompt for inputs and use default values
+        #[arg(long)]
+        no_prompt: bool,
+
+        /// Print detailed output during execution
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Deploy a unit with dependency management and Terraform orchestration
     #[command(after_help = "\
 EXAMPLES:

@@ -65,6 +65,34 @@ Located in `tests/init_tests.rs`. These test the `envie init` command thoroughly
 - Valid YAML configuration files throughout
 - Proper dependency chain: networking → database → API
 
+### New Command Tests (`cargo test --test new_command_tests`)
+Located in `tests/new_command_tests.rs`. These test the `envie new` command for scaffolding individual units:
+
+- **Template Support**: Tests all 6 templates (simple, with-modules, networking, database, api, compute)
+- **Simple Template**: Tests basic unit with single main.tf
+- **With-Modules Template**: Tests unit with multiple custom modules
+- **Networking Template**: Tests VPC and subnet scaffolding with AWS resources
+- **Database Template**: Tests DynamoDB scaffolding with Dedicated state management
+- **API Template**: Tests Lambda + API Gateway scaffolding with dependencies
+- **Compute Template**: Tests Lambda functions scaffolding
+- **Custom Path**: Tests creating units at non-default locations
+- **Module Dependencies**: Tests automatic dependency chain creation (module2 depends on module1, etc.)
+- **YAML Validation**: Tests generated envie.yaml is valid and well-structured
+- **Terraform Variables**: Tests all templates include standard Envie variables
+- **Error Handling**: Tests duplicate unit detection and invalid template errors
+- **Verbose Mode**: Tests detailed output during unit creation
+- **Helpful Output**: Tests user-friendly next steps and guidance
+
+**Current Status**: 18 passing
+
+**Key Features Tested**:
+- **6 Templates**: simple, with-modules, networking, database, api, compute
+- **Smart Dependencies**: Modules automatically depend on previous modules in chain
+- **AWS Resources**: Real AWS resources in templates (VPC, DynamoDB, Lambda, etc.)
+- **Valid Terraform**: All generated Terraform files have proper structure
+- **State Management**: Correct strategy per template (Service vs Dedicated)
+- **Customization**: Custom paths, custom module names, template selection
+
 ### Workspace Safety Tests (`cargo test --test workspace_safety_tests`)
 Located in `tests/workspace_safety_tests.rs`. These ensure safe workspace operations:
 
@@ -158,6 +186,9 @@ cargo test --test cli_tests
 # Run only init tests
 cargo test --test init_tests
 
+# Run only new command tests
+cargo test --test new_command_tests
+
 # Run only workspace safety tests
 cargo test --test workspace_safety_tests
 
@@ -174,7 +205,7 @@ cargo test --test e2e_terraform_validation_tests
 cargo test --test e2e_terraform_syntax_tests
 
 # Run all integration test suites
-cargo test --test integration_tests --test cli_tests --test init_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
+cargo test --test integration_tests --test cli_tests --test init_tests --test new_command_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -348,7 +379,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 
 ## Test Summary
 
-**Total Test Coverage**: 135 tests across 8 test suites
+**Total Test Coverage**: 153 tests across 9 test suites
 
 | Test Suite | Tests | Status | Purpose |
 |------------|-------|--------|---------|
@@ -356,6 +387,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 | Integration Tests | 8 | ✅ All passing | Test complete workflows |
 | CLI Tests | 14 | ✅ All passing | Test command-line interface |
 | **Init Tests** | **18** | **✅ All passing** | **Test project initialization command** |
+| **New Command Tests** | **18** | **✅ All passing** | **Test unit scaffolding command** |
 | Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
 | Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
 | Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |

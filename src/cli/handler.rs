@@ -33,6 +33,26 @@ impl CommandHandler {
                 let init_command = InitCommand::new(self.working_directory.clone());
                 init_command.execute(options).await
             }
+            Commands::New {
+                name,
+                template,
+                path,
+                modules,
+                no_prompt,
+                verbose,
+            } => {
+                let options = NewOptions {
+                    name,
+                    template,
+                    path,
+                    modules,
+                    no_prompt,
+                    verbose,
+                };
+
+                let new_command = NewCommand::new(self.working_directory.clone());
+                new_command.execute(options).await
+            }
             Commands::Deploy {
                 unit,
                 env,

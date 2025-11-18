@@ -10,6 +10,7 @@ pub mod clean;
 pub mod show;
 pub mod test_discovery;
 pub mod doctor;
+pub mod new;
 
 pub use deploy::*;
 pub use destroy::*;
@@ -23,3 +24,4 @@ pub use clean::*;
 pub use show::*;
 pub use test_discovery::*;
 pub use doctor::*;
+pub use new::*;
