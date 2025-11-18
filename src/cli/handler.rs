@@ -170,6 +170,12 @@ impl CommandHandler {
                 let shower = ShowCommand::new(self.working_directory.clone());
                 shower.execute(options)
             }
+            Commands::Doctor { verbose } => {
+                let options = DoctorOptions { verbose };
+
+                let doctor = DoctorCommand::new(self.working_directory.clone());
+                doctor.execute(options)
+            }
         }
     }
 

@@ -339,12 +339,35 @@ EXAMPLES:
         /// Show only sub-unit information
         #[arg(long)]
         modules: bool,
-        
+
         /// Show only dependency information
         #[arg(long)]
         dependencies: bool,
-        
+
         /// Print detailed output during execution
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Run health checks on your Envie project and environment
+    #[command(after_help = "\
+EXAMPLES:
+    # Run all health checks
+    envie doctor
+
+    # Run checks with verbose output
+    envie doctor --verbose
+
+CHECKS PERFORMED:
+    • Prerequisites (Terraform, AWS CLI, Git)
+    • Project configuration validity
+    • Unit discovery and validation
+    • AWS resource accessibility
+    • Dependency graph integrity
+
+TIP: Run this after initial setup or when troubleshooting issues
+    ")]
+    Doctor {
+        /// Print detailed output during checks
         #[arg(long)]
         verbose: bool,
     },
