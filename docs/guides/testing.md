@@ -89,9 +89,26 @@ Located in `tests/e2e_terraform_validation_tests.rs`. **These validate actual Te
 - **Multi-Provider**: Tests provider alias configurations
 - **Error Detection**: Tests invalid syntax and undefined variables
 
-**Current Status**: 9 tests (auto-skip if Terraform not installed)
+**Current Status**: 9 tests (auto-skip if Terraform not installed, requires network access)
 
 **Important**: Unlike mock-based tests, these validate that Envie generates **production-ready Terraform code** that works with the real Terraform CLI. See `tests/E2E_TESTING_README.md` for setup instructions.
+
+### E2E Terraform Syntax Tests (`cargo test --test e2e_terraform_syntax_tests`)
+Located in `tests/e2e_terraform_syntax_tests.rs`. **These validate Terraform HCL syntax without network access**:
+
+- **Local Backend Only**: Uses Terraform local backend (no S3, no network)
+- **Syntax Validation**: Uses `terraform fmt -check` to validate HCL syntax
+- **No Provider Download**: Tests don't require external providers
+- **Simple Units**: Tests single unit syntax validation
+- **Linear Chains**: Tests A→B→C dependency chains
+- **Diamond Patterns**: Tests complex dependency graphs
+- **Microservices**: Tests realistic 6-unit architecture
+- **File Structure**: Tests proper Terraform file organization
+- **Variables/Outputs**: Tests variable and output declarations
+
+**Current Status**: 7 tests (auto-skip if Terraform not installed, works offline)
+
+**Important**: These tests work without internet access and validate that generated Terraform has valid HCL syntax. Ideal for CI/CD environments with network restrictions.
 
 ## Running Tests
 
@@ -117,11 +134,14 @@ cargo test --test dependency_resolution_tests
 # Run only error handling tests
 cargo test --test error_handling_tests
 
-# Run only E2E Terraform validation tests
+# Run only E2E Terraform validation tests (requires network)
 cargo test --test e2e_terraform_validation_tests
 
+# Run only E2E Terraform syntax tests (works offline)
+cargo test --test e2e_terraform_syntax_tests
+
 # Run all new integration test suites
-cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests
+cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -295,7 +315,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 
 ## Test Summary
 
-**Total Test Coverage**: 110 tests across 6 test suites
+**Total Test Coverage**: 117 tests across 7 test suites
 
 | Test Suite | Tests | Status | Purpose |
 |------------|-------|--------|---------|
@@ -305,7 +325,8 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 | Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
 | Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
 | Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |
-| **E2E Terraform Validation** | **9** | **✅ All passing** | **Validate real Terraform code** |
+| **E2E Terraform Validation** | **9** | **⚠️ Network required** | **Validate real Terraform (with providers)** |
+| **E2E Terraform Syntax** | **7** | **✅ All passing** | **Validate HCL syntax (offline)** |
 
 **Comprehensive Coverage Areas**:
 - ✅ Workspace selection/creation (lines 318-324 in deploy.rs)
@@ -319,8 +340,10 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 - ✅ Configuration parsing (workspace and unit configs)
 - ✅ Error handling and validation
 - ✅ **Real Terraform code generation (E2E validation)**
+- ✅ **HCL syntax validation with real Terraform CLI (offline)**
 - ✅ **Complex dependency graphs (diamond, chains, microservices)**
 - ✅ **Provider configuration and variable handling**
+- ✅ **Local backend support for testing**
 
 ## Future Improvements
 
