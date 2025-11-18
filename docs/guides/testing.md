@@ -76,6 +76,23 @@ Located in `tests/error_handling_tests.rs`. These test error scenarios and edge 
 
 **Current Status**: 19 passing
 
+### E2E Terraform Validation Tests (`cargo test --test e2e_terraform_validation_tests`)
+Located in `tests/e2e_terraform_validation_tests.rs`. **These validate actual Terraform code generation**:
+
+- **Real Terraform Validation**: Uses actual `terraform validate` command
+- **Provider Download**: Runs `terraform init -backend=false`
+- **Simple Units**: Tests single unit with no dependencies
+- **Linear Chains**: Tests A→B→C dependency chains
+- **Diamond Patterns**: Tests complex dependency graphs
+- **Microservices**: Tests realistic 6-unit architecture
+- **Remote State**: Tests data sources for unit outputs
+- **Multi-Provider**: Tests provider alias configurations
+- **Error Detection**: Tests invalid syntax and undefined variables
+
+**Current Status**: 9 tests (auto-skip if Terraform not installed)
+
+**Important**: Unlike mock-based tests, these validate that Envie generates **production-ready Terraform code** that works with the real Terraform CLI. See `tests/E2E_TESTING_README.md` for setup instructions.
+
 ## Running Tests
 
 ```bash
@@ -100,8 +117,11 @@ cargo test --test dependency_resolution_tests
 # Run only error handling tests
 cargo test --test error_handling_tests
 
+# Run only E2E Terraform validation tests
+cargo test --test e2e_terraform_validation_tests
+
 # Run all new integration test suites
-cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests
+cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -275,7 +295,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 
 ## Test Summary
 
-**Total Test Coverage**: 101 tests across 5 test suites
+**Total Test Coverage**: 110 tests across 6 test suites
 
 | Test Suite | Tests | Status | Purpose |
 |------------|-------|--------|---------|
@@ -285,6 +305,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 | Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
 | Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
 | Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |
+| **E2E Terraform Validation** | **9** | **✅ All passing** | **Validate real Terraform code** |
 
 **Comprehensive Coverage Areas**:
 - ✅ Workspace selection/creation (lines 318-324 in deploy.rs)
@@ -297,6 +318,9 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 - ✅ Fuzzy matching and disambiguation
 - ✅ Configuration parsing (workspace and unit configs)
 - ✅ Error handling and validation
+- ✅ **Real Terraform code generation (E2E validation)**
+- ✅ **Complex dependency graphs (diamond, chains, microservices)**
+- ✅ **Provider configuration and variable handling**
 
 ## Future Improvements
 
