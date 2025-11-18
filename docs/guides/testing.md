@@ -35,6 +35,47 @@ Located in `tests/cli_tests.rs`. These test the CLI interface:
 
 **Current Status**: 14 passing
 
+### Workspace Safety Tests (`cargo test --test workspace_safety_tests`)
+Located in `tests/workspace_safety_tests.rs`. These ensure safe workspace operations:
+
+- **Workspace Resolution**: Tests ephemeral vs stable environment resolution
+- **Backend Isolation**: Tests that different environments use different backends
+- **State Key Generation**: Tests unique state keys per workspace
+- **Workspace Naming**: Tests consistent workspace name usage
+- **Cross-Workspace Dependencies**: Tests dependency resolution across workspaces
+- **Production Safety**: Tests that production and ephemeral use different buckets/locks
+
+**Current Status**: 12 passing
+
+### Dependency Resolution Tests (`cargo test --test dependency_resolution_tests`)
+Located in `tests/dependency_resolution_tests.rs`. These test complex dependency scenarios:
+
+- **Linear Dependencies**: Tests simple A→B→C chains
+- **Diamond Dependencies**: Tests A→(B,C)→D patterns
+- **Complex Graphs**: Tests multi-level dependency trees
+- **Circular Detection**: Tests detection of 2-unit, 3-unit, and indirect cycles
+- **Missing Dependencies**: Tests graceful handling of missing units
+- **Deep Chains**: Tests 10+ level dependency chains
+- **Parallel Units**: Tests independent units with no dependencies
+- **Path Resolution**: Tests nested directory structures and relative paths
+
+**Current Status**: 14 passing
+
+### Error Handling Tests (`cargo test --test error_handling_tests`)
+Located in `tests/error_handling_tests.rs`. These test error scenarios and edge cases:
+
+- **Invalid YAML**: Tests handling of malformed configuration files
+- **Invalid Dependency Format**: Tests rejection of incorrect dependency syntax
+- **Circular Dependencies**: Tests error messages for cycles
+- **Duplicate Names**: Tests handling of units with same name in different dirs
+- **Special Characters**: Tests support for dashes, underscores, periods in names
+- **Unicode Support**: Tests international characters in unit names
+- **Long Names**: Tests handling of very long unit names
+- **Empty Fields**: Tests handling of empty values
+- **Lenient Parsing**: Documents graceful defaults for invalid values
+
+**Current Status**: 19 passing
+
 ## Running Tests
 
 ```bash
@@ -49,6 +90,18 @@ cargo test --test integration_tests
 
 # Run only CLI tests
 cargo test --test cli_tests
+
+# Run only workspace safety tests
+cargo test --test workspace_safety_tests
+
+# Run only dependency resolution tests
+cargo test --test dependency_resolution_tests
+
+# Run only error handling tests
+cargo test --test error_handling_tests
+
+# Run all new integration test suites
+cargo test --test integration_tests --test cli_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -220,6 +273,31 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 - **Error Handling**: 100% coverage of error paths
 - **Integration Paths**: All major workflows tested
 
+## Test Summary
+
+**Total Test Coverage**: 101 tests across 5 test suites
+
+| Test Suite | Tests | Status | Purpose |
+|------------|-------|--------|---------|
+| Unit Tests | 34 | ✅ 34 passing | Test individual modules and functions |
+| Integration Tests | 8 | ✅ All passing | Test complete workflows |
+| CLI Tests | 14 | ✅ All passing | Test command-line interface |
+| Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
+| Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
+| Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |
+
+**Comprehensive Coverage Areas**:
+- ✅ Workspace selection/creation (lines 318-324 in deploy.rs)
+- ✅ State management strategies (dedicated, parent, shared, group)
+- ✅ Circular dependency detection
+- ✅ Environment resolution (ephemeral, stable, direct workspace)
+- ✅ Backend configuration isolation
+- ✅ Cross-workspace dependencies
+- ✅ Unit discovery and registry
+- ✅ Fuzzy matching and disambiguation
+- ✅ Configuration parsing (workspace and unit configs)
+- ✅ Error handling and validation
+
 ## Future Improvements
 
 - [ ] Add property-based testing with `proptest`
@@ -227,3 +305,4 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 - [ ] Expand mock executor to simulate more Terraform scenarios
 - [ ] Add snapshot testing for CLI output
 - [ ] Increase coverage of edge cases
+- [ ] Add mutation testing to verify test quality
