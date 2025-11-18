@@ -1,0 +1,5 @@
+name: database
+description: Database service
+unit_type: service
+state_management: dedicated
+dependencies: []

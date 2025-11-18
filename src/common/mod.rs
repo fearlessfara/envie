@@ -10,6 +10,7 @@ pub mod environment;
 pub mod unit_config;
 pub mod unit_discovery;
 pub mod disambiguation;
+pub mod terraform_executor;
 
 pub use backend_bootstrap::*;
 pub use error::*;
@@ -23,3 +24,4 @@ pub use environment::*;
 pub use unit_config::*;
 pub use unit_discovery::*;
 pub use disambiguation::*;
+pub use terraform_executor::*;

@@ -1,0 +1,7 @@
+name: api
+description: API service
+unit_type: service
+state_management: dedicated
+dependencies:
+  - path: ../database
+    environment: stable.sandbox

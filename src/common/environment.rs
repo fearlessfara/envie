@@ -247,6 +247,7 @@ mod tests {
         });
         
         let environment_config = EnvironmentConfig {
+            project: None,
             ephemeral: EphemeralConfig {
                 naming_pattern: "{repo}-{merge-request}".to_string(),
                 backend: BackendConfig {
@@ -287,6 +288,7 @@ mod tests {
     #[test]
     fn test_state_key_generation() {
         let environment_config = EnvironmentConfig {
+            project: None,
             ephemeral: EphemeralConfig {
                 naming_pattern: "{repo}-{merge-request}".to_string(),
                 backend: BackendConfig {

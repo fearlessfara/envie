@@ -1,0 +1,42 @@
+version: '1.0'
+
+project:
+  name: test-project
+  description: Test project for Envie testing
+
+environments:
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    backend:
+      type: s3
+      config:
+        bucket: "test-terraform-state"
+        region: "us-east-1"
+        key_pattern: "ephemeral/{workspace}/{path}/terraform.tfstate"
+        dynamodb_table: "test-terraform-locks"
+        encrypt: "true"
+
+  stable:
+    sandbox:
+      workspace: test-project-sandbox
+      description: Sandbox environment
+      backend:
+        type: s3
+        config:
+          bucket: "test-terraform-state"
+          region: "us-east-1"
+          key_pattern: "stable/sandbox/{path}/terraform.tfstate"
+          dynamodb_table: "test-terraform-locks"
+          encrypt: "true"
+
+    production:
+      workspace: test-project-production
+      description: Production environment
+      backend:
+        type: s3
+        config:
+          bucket: "test-terraform-state-prod"
+          region: "us-east-1"
+          key_pattern: "production/{path}/terraform.tfstate"
+          dynamodb_table: "test-terraform-locks-prod"
+          encrypt: "true"

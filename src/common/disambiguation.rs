@@ -261,7 +261,7 @@ mod tests {
             description: "API Service".to_string(),
             unit_type: UnitType::Service,
             path: "services/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
@@ -281,7 +281,7 @@ mod tests {
             description: "Database".to_string(),
             unit_type: UnitType::Service,
             path: "services/database".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
@@ -300,7 +300,7 @@ mod tests {
             description: "Backend API".to_string(),
             unit_type: UnitType::Service,
             path: "services/backend/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
@@ -310,7 +310,7 @@ mod tests {
             description: "Frontend API".to_string(),
             unit_type: UnitType::Service,
             path: "services/frontend/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
