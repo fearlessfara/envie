@@ -33,7 +33,7 @@ impl CommandHandler {
                 let init_command = InitCommand::new(self.working_directory.clone());
                 init_command.execute(options).await
             }
-            Commands::New {
+            Commands::Scaffold {
                 name,
                 template,
                 path,

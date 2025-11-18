@@ -5,11 +5,11 @@ use tempfile::TempDir;
 use serde_yaml::Value;
 
 #[test]
-fn test_new_simple_template() {
+fn test_scaffold_simple_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -27,11 +27,11 @@ fn test_new_simple_template() {
 }
 
 #[test]
-fn test_new_with_modules_template() {
+fn test_scaffold_with_modules_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("with-modules")
@@ -51,11 +51,11 @@ fn test_new_with_modules_template() {
 }
 
 #[test]
-fn test_new_networking_template() {
+fn test_scaffold_networking_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("network")
         .arg("--template")
         .arg("networking")
@@ -78,11 +78,11 @@ fn test_new_networking_template() {
 }
 
 #[test]
-fn test_new_database_template() {
+fn test_scaffold_database_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("data")
         .arg("--template")
         .arg("database")
@@ -100,11 +100,11 @@ fn test_new_database_template() {
 }
 
 #[test]
-fn test_new_api_template() {
+fn test_scaffold_api_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("auth")
         .arg("--template")
         .arg("api")
@@ -131,11 +131,11 @@ fn test_new_api_template() {
 }
 
 #[test]
-fn test_new_compute_template() {
+fn test_scaffold_compute_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("worker")
         .arg("--template")
         .arg("compute")
@@ -149,13 +149,13 @@ fn test_new_compute_template() {
 }
 
 #[test]
-fn test_new_custom_path() {
+fn test_scaffold_custom_path() {
     let temp_dir = TempDir::new().unwrap();
     let custom_path = temp_dir.path().join("custom").join("location").join("myservice");
 
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -170,13 +170,13 @@ fn test_new_custom_path() {
 }
 
 #[test]
-fn test_new_unit_already_exists() {
+fn test_scaffold_unit_already_exists() {
     let temp_dir = TempDir::new().unwrap();
 
     // Create first unit
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -186,7 +186,7 @@ fn test_new_unit_already_exists() {
     // Try to create same unit again
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -198,11 +198,11 @@ fn test_new_unit_already_exists() {
 }
 
 #[test]
-fn test_new_invalid_template() {
+fn test_scaffold_invalid_template() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("invalid-template")
@@ -214,11 +214,11 @@ fn test_new_invalid_template() {
 }
 
 #[test]
-fn test_new_verbose_output() {
+fn test_scaffold_verbose_output() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -232,11 +232,11 @@ fn test_new_verbose_output() {
 }
 
 #[test]
-fn test_new_creates_valid_yaml() {
+fn test_scaffold_creates_valid_yaml() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("testservice")
         .arg("--template")
         .arg("simple")
@@ -255,11 +255,11 @@ fn test_new_creates_valid_yaml() {
 }
 
 #[test]
-fn test_new_terraform_files_have_variables() {
+fn test_scaffold_terraform_files_have_variables() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")
@@ -276,11 +276,11 @@ fn test_new_terraform_files_have_variables() {
 }
 
 #[test]
-fn test_new_networking_has_aws_resources() {
+fn test_scaffold_networking_has_aws_resources() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("network")
         .arg("--template")
         .arg("networking")
@@ -299,11 +299,11 @@ fn test_new_networking_has_aws_resources() {
 }
 
 #[test]
-fn test_new_database_has_dynamodb() {
+fn test_scaffold_database_has_dynamodb() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("data")
         .arg("--template")
         .arg("database")
@@ -321,11 +321,11 @@ fn test_new_database_has_dynamodb() {
 }
 
 #[test]
-fn test_new_api_has_lambda() {
+fn test_scaffold_api_has_lambda() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("auth")
         .arg("--template")
         .arg("api")
@@ -344,11 +344,11 @@ fn test_new_api_has_lambda() {
 }
 
 #[test]
-fn test_new_with_modules_default_names() {
+fn test_scaffold_with_modules_default_names() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("with-modules")
@@ -364,11 +364,11 @@ fn test_new_with_modules_default_names() {
 }
 
 #[test]
-fn test_new_module_dependency_chain() {
+fn test_scaffold_module_dependency_chain() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("with-modules")
@@ -406,11 +406,11 @@ fn test_new_module_dependency_chain() {
 }
 
 #[test]
-fn test_new_helpful_next_steps() {
+fn test_scaffold_helpful_next_steps() {
     let temp_dir = TempDir::new().unwrap();
     let mut cmd = Command::cargo_bin("envie").unwrap();
     cmd.current_dir(temp_dir.path());
-    cmd.arg("new")
+    cmd.arg("scaffold")
         .arg("myservice")
         .arg("--template")
         .arg("simple")

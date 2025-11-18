@@ -55,25 +55,27 @@ EXAMPLES:
         #[arg(long)]
         verbose: bool,
     },
-    /// Create a new unit (service) with scaffolding
+    /// Scaffold a new unit (service) with template
+    #[command(visible_alias = "gen")]
     #[command(after_help = "\
 EXAMPLES:
-    # Create a simple unit interactively
-    envie new myservice
+    # Scaffold a simple unit interactively
+    envie scaffold myservice
+    envie gen myservice                  # Short alias
 
-    # Create with specific template
-    envie new auth --template api
-    envie new network --template networking
-    envie new data --template database
+    # Scaffold with specific template
+    envie scaffold auth --template api
+    envie gen network -t networking      # Short alias + template flag
+    envie scaffold data --template database
 
-    # Create with custom modules
-    envie new myservice --template with-modules --module lambda --module gateway
+    # Scaffold with custom modules
+    envie scaffold myservice --template with-modules --module lambda --module gateway
 
-    # Create at custom path
-    envie new myservice --path custom/path/myservice
+    # Scaffold at custom path
+    envie scaffold myservice --path custom/path/myservice
 
     # Skip prompts
-    envie new myservice --no-prompt
+    envie scaffold myservice --no-prompt
 
 AVAILABLE TEMPLATES:
     simple       - Simple unit with single main.tf
@@ -83,12 +85,12 @@ AVAILABLE TEMPLATES:
     api          - API service (Lambda, API Gateway)
     compute      - Compute service (Lambda functions)
     ")]
-    New {
+    Scaffold {
         /// Name of the unit to create
         name: String,
 
         /// Template to use (simple, with-modules, networking, database, api, compute)
-        #[arg(long)]
+        #[arg(long, short = 't')]
         template: Option<String>,
 
         /// Path where the unit should be created (default: services/<name>)
