@@ -59,7 +59,8 @@ impl DestroyCommand {
         let units_to_destroy_unordered = if let Some(ref unit_name) = options.unit_name {
             // Destroy specific unit(s) with disambiguation (supports path-based groups)
             let matches = discovery.registry.resolve_unit(unit_name);
-            resolve_units_with_prompt(matches, unit_name, false)?
+            let all_units = discovery.registry.get_all_units();
+            resolve_units_with_prompt(matches, &all_units, unit_name, false)?
         } else {
             // Destroy all units
             discovery.get_all_units()

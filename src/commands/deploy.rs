@@ -64,7 +64,8 @@ impl DeployCommand {
             // Deploy specific unit(s) with disambiguation
             // Supports single units, ambiguous names, or path-based groups
             let matches = discovery.registry.resolve_unit(unit_name);
-            resolve_units_with_prompt(matches, unit_name, options.no_prompt)?
+            let all_units = discovery.registry.get_all_units();
+            resolve_units_with_prompt(matches, &all_units, unit_name, options.no_prompt)?
         } else {
             // Check if we're in a unit directory first
             let current_dir = std::env::current_dir()?;

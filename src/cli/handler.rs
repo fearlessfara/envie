@@ -42,13 +42,34 @@ impl CommandHandler {
                 verbose,
             } => {
                 let environments = self.parse_environments(environment)?;
-                
+
                 let options = DeployOptions {
                     unit_name: unit,
                     env_id: env,
                     environment_overrides: environments,
                     dry_run,
                     no_prompt,
+                    verbose,
+                };
+
+                let deployer = DeployCommand::new(self.working_directory.clone());
+                deployer.execute(options).await
+            }
+            Commands::Plan {
+                unit,
+                env,
+                environment,
+                verbose,
+            } => {
+                // Plan is just an alias for deploy --dry-run
+                let environments = self.parse_environments(environment)?;
+
+                let options = DeployOptions {
+                    unit_name: unit,
+                    env_id: env,
+                    environment_overrides: environments,
+                    dry_run: true,  // Always use dry-run for plan
+                    no_prompt: true, // No prompts needed for preview
                     verbose,
                 };
 
@@ -194,7 +215,7 @@ impl CommandHandler {
 
     fn parse_environments(&self, environment_args: Vec<String>) -> Result<HashMap<String, String>> {
         let mut environments = HashMap::new();
-        
+
         for env_arg in environment_args {
             if let Some((key, value)) = env_arg.split_once(':') {
                 if key == "default" {
@@ -204,9 +225,18 @@ impl CommandHandler {
                     environments.insert(key.to_string(), value.to_string());
                 }
             } else {
-                return Err(EnvieError::ValidationError(
-                    format!("Invalid environment format: {}. Expected format: key:value", env_arg)
-                ));
+                let mut error_msg = format!("❌ Invalid environment override format: '{}'\n\n", env_arg);
+                error_msg.push_str("💡 Expected format:\n");
+                error_msg.push_str("   -E <unit>:<environment>\n\n");
+                error_msg.push_str("💡 Examples:\n");
+                error_msg.push_str("   -E database:stable.sandbox\n");
+                error_msg.push_str("   -E networking:stable.production\n");
+                error_msg.push_str("   -E api:ephemeral\n\n");
+                error_msg.push_str("💡 Common mistakes:\n");
+                error_msg.push_str("   ✗ -E stable.sandbox (missing unit name)\n");
+                error_msg.push_str("   ✓ -E database:stable.sandbox\n");
+
+                return Err(EnvieError::ValidationError(error_msg));
             }
         }
 
