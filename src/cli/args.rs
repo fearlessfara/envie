@@ -26,84 +26,34 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Initialize a new Envie project with configuration scaffolding
+    /// Initialize workspace or unit configuration
     #[command(after_help = "\
 EXAMPLES:
-    # Initialize a new project interactively
-    envie init
+    # Initialize workspace (creates workspace.envie.yaml)
+    envie init --project
 
-    # Initialize with name and description
-    envie init --name myapp --description \"My infrastructure\"
+    # Initialize unit (creates envie.yaml in folder)
+    envie init --unit services/auth
 
-    # Skip prompts and use defaults
-    envie init --name myapp --no-prompt
+    # Initialize current directory as workspace
+    envie init --project --name myapp
     ")]
     Init {
-        /// Project name (will prompt if not provided)
+        /// Initialize workspace configuration
+        #[arg(long, conflicts_with = "unit")]
+        project: bool,
+
+        /// Initialize unit at path (creates folder if needed)
+        #[arg(long, conflicts_with = "project")]
+        unit: Option<String>,
+
+        /// Project/unit name
         #[arg(long)]
         name: Option<String>,
 
-        /// Project description (will prompt if not provided)
+        /// Project description (workspace only)
         #[arg(long)]
         description: Option<String>,
-
-        /// Don't prompt for inputs and use default values
-        #[arg(long)]
-        no_prompt: bool,
-
-        /// Print detailed output during execution
-        #[arg(long)]
-        verbose: bool,
-    },
-    /// Scaffold a new unit (service) with template
-    #[command(visible_alias = "gen")]
-    #[command(after_help = "\
-EXAMPLES:
-    # Scaffold a simple unit interactively
-    envie scaffold myservice
-    envie gen myservice                  # Short alias
-
-    # Scaffold with specific template
-    envie scaffold auth --template api
-    envie gen network -t networking      # Short alias + template flag
-    envie scaffold data --template database
-
-    # Scaffold with custom modules
-    envie scaffold myservice --template with-modules --module lambda --module gateway
-
-    # Scaffold at custom path
-    envie scaffold myservice --path custom/path/myservice
-
-    # Skip prompts
-    envie scaffold myservice --no-prompt
-
-AVAILABLE TEMPLATES:
-    simple       - Simple unit with single main.tf
-    with-modules - Unit with example modules structure
-    networking   - Networking service (VPC, subnets, security groups)
-    database     - Database service (DynamoDB, RDS)
-    api          - API service (Lambda, API Gateway)
-    compute      - Compute service (Lambda functions)
-    ")]
-    Scaffold {
-        /// Name of the unit to create
-        name: String,
-
-        /// Template to use (simple, with-modules, networking, database, api, compute)
-        #[arg(long, short = 't')]
-        template: Option<String>,
-
-        /// Path where the unit should be created (default: services/<name>)
-        #[arg(long)]
-        path: Option<String>,
-
-        /// Module names to create (for with-modules template)
-        #[arg(long = "module", action = clap::ArgAction::Append)]
-        modules: Vec<String>,
-
-        /// Don't prompt for inputs and use default values
-        #[arg(long)]
-        no_prompt: bool,
 
         /// Print detailed output during execution
         #[arg(long)]
@@ -219,6 +169,28 @@ NOTE: This keeps the backend infrastructure (S3/DynamoDB).
         /// Simulate the destruction process without making changes
         #[arg(short = 'D', long)]
         dry_run: bool,
+
+        /// Print detailed output during execution
+        #[arg(long)]
+        verbose: bool,
+    },
+    /// Refresh state to match reality (like terraform refresh)
+    #[command(after_help = "\
+EXAMPLES:
+    # Refresh state for a unit
+    envie refresh --unit api --env dev-123
+
+    # Refresh with verbose output
+    envie refresh --unit api --env test --verbose
+    ")]
+    Refresh {
+        /// The name of the unit to refresh (optional - will auto-discover from current directory)
+        #[arg(short = 'U', long)]
+        unit: Option<String>,
+
+        /// The ID of the environment
+        #[arg(long)]
+        env: String,
 
         /// Print detailed output during execution
         #[arg(long)]

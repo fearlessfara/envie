@@ -18,40 +18,22 @@ impl CommandHandler {
     pub async fn handle_command(&self, command: Commands) -> Result<()> {
         match command {
             Commands::Init {
+                project,
+                unit,
                 name,
                 description,
-                no_prompt,
                 verbose,
             } => {
                 let options = InitOptions {
+                    project,
+                    unit,
                     name,
                     description,
-                    no_prompt,
                     verbose,
                 };
 
                 let init_command = InitCommand::new(self.working_directory.clone());
                 init_command.execute(options).await
-            }
-            Commands::Scaffold {
-                name,
-                template,
-                path,
-                modules,
-                no_prompt,
-                verbose,
-            } => {
-                let options = NewOptions {
-                    name,
-                    template,
-                    path,
-                    modules,
-                    no_prompt,
-                    verbose,
-                };
-
-                let new_command = NewCommand::new(self.working_directory.clone());
-                new_command.execute(options).await
             }
             Commands::Deploy {
                 unit,
@@ -111,6 +93,20 @@ impl CommandHandler {
 
                 let destroyer = DestroyCommand::new(self.working_directory.clone());
                 destroyer.execute(options).await
+            }
+            Commands::Refresh {
+                unit,
+                env,
+                verbose,
+            } => {
+                let options = RefreshOptions {
+                    unit_name: unit,
+                    env_id: env,
+                    verbose,
+                };
+
+                let refresher = RefreshCommand::new(self.working_directory.clone());
+                refresher.execute(options).await
             }
             Commands::Delete {
                 unit: _,

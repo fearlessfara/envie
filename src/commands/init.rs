@@ -1,14 +1,13 @@
 use crate::common::Result;
-use crate::common::service_config::{ProjectInfo, WorkspaceConfig, ServiceConfig, ModuleConfig, ServiceDiscovery};
+use crate::common::service_config::{ProjectInfo, WorkspaceConfig, ServiceConfig};
 use std::collections::HashMap;
-use std::io::{self, Write};
-use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct InitOptions {
+    pub project: bool,
+    pub unit: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
-    pub no_prompt: bool,
     pub verbose: bool,
 }
 
@@ -22,447 +21,110 @@ impl InitCommand {
     }
 
     pub async fn execute(&self, options: InitOptions) -> Result<()> {
+        if options.project {
+            self.init_project(&options).await
+        } else if let Some(unit_path) = &options.unit {
+            self.init_unit(unit_path, &options).await
+        } else {
+            Err(crate::common::EnvieError::ValidationError(
+                "Must specify either --project or --unit".to_string()
+            ))
+        }
+    }
+
+    async fn init_project(&self, options: &InitOptions) -> Result<()> {
         if options.verbose {
-            println!("🚀 Initializing Envie project...");
+            println!("🚀 Initializing Envie workspace...");
         }
 
-        // Check if already initialized
-        if self.is_already_initialized()? {
-            if !options.no_prompt {
-                print!("Project already initialized. Continue anyway? [y/N]: ");
-                io::stdout().flush()?;
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-                if !input.trim().to_lowercase().starts_with('y') {
-                    println!("Initialization cancelled.");
-                    return Ok(());
-                }
-            }
+        // Check if workspace.envie.yaml already exists
+        let workspace_file = self.working_directory.join("workspace.envie.yaml");
+        if workspace_file.exists() {
+            return Err(crate::common::EnvieError::ProcessError(
+                "Workspace already initialized (workspace.envie.yaml exists)".to_string()
+            ));
         }
 
-        // Get project information
-        let project_info = self.get_project_info(&options)?;
+        // Get project name
+        let name = options.name.clone().unwrap_or_else(|| "myproject".to_string());
+        let description = options.description.clone().unwrap_or_else(|| "My Envie project".to_string());
 
-        // Create workspace configuration
-        let workspace_config = self.create_workspace_config(&project_info)?;
-        
-        // Write workspace.envie.yaml
-        self.write_workspace_config(&workspace_config)?;
+        let project_info = ProjectInfo { name, description };
 
-        // Create services directory structure
-        self.create_services_structure()?;
-
-        // Create example services
-        self.create_example_services()?;
-
-        // Create .gitignore entries
-        self.update_gitignore()?;
-
-        // Create README
-        self.create_readme(&project_info)?;
-
-        println!("\n✅ Envie project initialized successfully!");
-        println!("\n📁 Project structure created:");
-        println!("  ├── workspace.envie.yaml     # Global project configuration");
-        println!("  ├── services/                # Units directory");
-        println!("  │   ├── networking/          # Example networking service");
-        println!("  │   ├── database/            # Example database service");
-        println!("  │   └── api/                 # Example API service");
-        println!("  └── README.md                # Project documentation");
-        
-        println!("\n🚀 Next steps:");
-        println!("  1. Review and customize workspace.envie.yaml and unit envie.yaml files");
-        println!("  2. Add your units to the services/ directory");
-        println!("  3. Run 'envie deploy --service <name> --merge-request <id>' to deploy");
-
-        Ok(())
-    }
-
-    fn is_already_initialized(&self) -> Result<bool> {
-        let workspace_envie = self.working_directory.join("workspace.envie.yaml");
-        Ok(workspace_envie.exists())
-    }
-
-    fn get_project_info(&self, options: &InitOptions) -> Result<ProjectInfo> {
-        let name = if let Some(name) = &options.name {
-            name.clone()
-        } else if options.no_prompt {
-            "my-envie-project".to_string()
-        } else {
-            print!("Project name [my-envie-project]: ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            let name = input.trim();
-            if name.is_empty() {
-                "my-envie-project".to_string()
-            } else {
-                name.to_string()
-            }
-        };
-
-        let description = if let Some(description) = &options.description {
-            description.clone()
-        } else if options.no_prompt {
-            "An Envie-managed Terraform project".to_string()
-        } else {
-            print!("Project description [An Envie-managed Terraform project]: ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            let description = input.trim();
-            if description.is_empty() {
-                "An Envie-managed Terraform project".to_string()
-            } else {
-                description.to_string()
-            }
-        };
-
-        Ok(ProjectInfo {
-            name,
-            description,
-        })
-    }
-
-    fn create_workspace_config(&self, project_info: &ProjectInfo) -> Result<WorkspaceConfig> {
-        Ok(WorkspaceConfig {
+        // Create minimal workspace config
+        let workspace_config = WorkspaceConfig {
             version: "1.0".to_string(),
-            project: Some(project_info.clone()),
-            services: vec![
-                ServiceDiscovery {
-                    name: Some("networking".to_string()),
-                    path: "services/networking".to_string(),
-                },
-                ServiceDiscovery {
-                    name: Some("database".to_string()),
-                    path: "services/database".to_string(),
-                },
-                ServiceDiscovery {
-                    name: Some("api".to_string()),
-                    path: "services/api".to_string(),
-                },
-            ],
+            project: Some(project_info),
+            services: vec![],
             defaults: HashMap::new(),
             environments: None,
-        })
-    }
+        };
 
-    fn write_workspace_config(&self, config: &WorkspaceConfig) -> Result<()> {
-        let workspace_envie = self.working_directory.join("workspace.envie.yaml");
-        let content = serde_yaml::to_string(config)?;
-        std::fs::write(workspace_envie, content)?;
-        Ok(())
-    }
+        // Write workspace.envie.yaml
+        let content = serde_yaml::to_string(&workspace_config)?;
+        std::fs::write(workspace_file, content)?;
 
-    fn create_services_structure(&self) -> Result<()> {
-        let services_dir = self.working_directory.join("services");
-        std::fs::create_dir_all(&services_dir)?;
-        Ok(())
-    }
-
-    fn create_example_services(&self) -> Result<()> {
-        // Create networking service
-        self.create_networking_service()?;
-        
-        // Create database service
-        self.create_database_service()?;
-        
-        // Create API service
-        self.create_api_service()?;
+        println!("✅ Workspace initialized!");
+        println!("📝 Created workspace.envie.yaml");
+        println!("\n🚀 Next steps:");
+        println!("  1. Create units: mkdir -p services/myunit");
+        println!("  2. Initialize unit: envie init --unit services/myunit");
+        println!("  3. Add Terraform code to services/myunit/main.tf");
 
         Ok(())
     }
 
-    fn create_networking_service(&self) -> Result<()> {
-        let service_dir = self.working_directory.join("services").join("networking");
-        std::fs::create_dir_all(&service_dir)?;
-        std::fs::create_dir_all(service_dir.join("modules").join("vpc"))?;
-        std::fs::create_dir_all(service_dir.join("modules").join("subnets"))?;
-        std::fs::create_dir_all(service_dir.join("modules").join("security-groups"))?;
+    async fn init_unit(&self, unit_path: &str, options: &InitOptions) -> Result<()> {
+        if options.verbose {
+            println!("🚀 Initializing unit at {}...", unit_path);
+        }
 
-        // Create envie.yaml file
-        let config = ServiceConfig {
-            name: "networking".to_string(),
-            description: "Networking infrastructure with VPC, subnets, and security groups".to_string(),
-            modules: vec![
-                ModuleConfig {
-                    name: "vpc".to_string(),
-                    description: "VPC configuration".to_string(),
-                    path: "modules/vpc".to_string(),
-                    dependencies: vec![],
-                    state_management: crate::common::service_config::StateManagement::Service,
-                },
-                ModuleConfig {
-                    name: "subnets".to_string(),
-                    description: "Subnet configuration".to_string(),
-                    path: "modules/subnets".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "./vpc".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Service,
-                },
-                ModuleConfig {
-                    name: "security-groups".to_string(),
-                    description: "Security group configuration".to_string(),
-                    path: "modules/security-groups".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "./vpc".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Service,
-                },
-            ],
+        let unit_dir = self.working_directory.join(unit_path);
+
+        // Create directory if it doesn't exist
+        if !unit_dir.exists() {
+            std::fs::create_dir_all(&unit_dir)?;
+            if options.verbose {
+                println!("📁 Created directory: {}", unit_path);
+            }
+        }
+
+        // Check if envie.yaml already exists
+        let envie_yaml = unit_dir.join("envie.yaml");
+        if envie_yaml.exists() {
+            return Err(crate::common::EnvieError::ProcessError(
+                format!("Unit already initialized (envie.yaml exists in {})", unit_path)
+            ));
+        }
+
+        // Get unit name from path (last component)
+        let unit_name = unit_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unit")
+            .to_string();
+
+        let name = options.name.clone().unwrap_or(unit_name.clone());
+
+        // Create basic unit config
+        let unit_config = ServiceConfig {
+            name: name.clone(),
+            description: format!("{} unit", name),
+            modules: vec![],
             dependencies: vec![],
         };
 
-        let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join("envie.yaml"), content)?;
+        // Write envie.yaml
+        let content = serde_yaml::to_string(&unit_config)?;
+        std::fs::write(envie_yaml, content)?;
 
-        // Create example Terraform files
-        self.create_example_terraform_files(&service_dir)?;
+        println!("✅ Unit initialized!");
+        println!("📝 Created {}/envie.yaml", unit_path);
+        println!("\n🚀 Next steps:");
+        println!("  1. Add Terraform code to {}/main.tf", unit_path);
+        println!("  2. Configure dependencies in {}/envie.yaml", unit_path);
+        println!("  3. Deploy: envie deploy --unit {} --env <env-id>", name);
 
-        Ok(())
-    }
-
-    fn create_database_service(&self) -> Result<()> {
-        let service_dir = self.working_directory.join("services").join("database");
-        std::fs::create_dir_all(&service_dir)?;
-        std::fs::create_dir_all(service_dir.join("modules").join("dynamodb"))?;
-        std::fs::create_dir_all(service_dir.join("modules").join("rds"))?;
-
-        // Create envie.yaml file
-        let config = ServiceConfig {
-            name: "database".to_string(),
-            description: "Database layer with DynamoDB and RDS".to_string(),
-            modules: vec![
-                ModuleConfig {
-                    name: "dynamodb".to_string(),
-                    description: "DynamoDB table configuration".to_string(),
-                    path: "modules/dynamodb".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "../networking/modules/vpc".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Dedicated,
-                },
-                ModuleConfig {
-                    name: "rds".to_string(),
-                    description: "RDS database configuration".to_string(),
-                    path: "modules/rds".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "../networking/modules/vpc".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                        crate::common::service_config::DependencyReference {
-                            path: "../networking/modules/security-groups".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Dedicated,
-                },
-            ],
-            dependencies: vec!["../networking".to_string()],
-        };
-
-        let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join("envie.yaml"), content)?;
-
-        // Create example Terraform files
-        self.create_example_terraform_files(&service_dir)?;
-
-        Ok(())
-    }
-
-    fn create_api_service(&self) -> Result<()> {
-        let service_dir = self.working_directory.join("services").join("api");
-        std::fs::create_dir_all(&service_dir)?;
-        std::fs::create_dir_all(service_dir.join("modules").join("lambda"))?;
-        std::fs::create_dir_all(service_dir.join("modules").join("step-functions"))?;
-        std::fs::create_dir_all(service_dir.join("modules").join("gateway"))?;
-
-        // Create envie.yaml file
-        let config = ServiceConfig {
-            name: "api".to_string(),
-            description: "API layer with Lambda, Step Functions, and API Gateway".to_string(),
-            modules: vec![
-                ModuleConfig {
-                    name: "lambda".to_string(),
-                    description: "Lambda function for API handler".to_string(),
-                    path: "modules/lambda".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "../../database/modules/dynamodb".to_string(),
-                            environment: "stable.sandbox".to_string(),
-                        },
-                        crate::common::service_config::DependencyReference {
-                            path: "../../networking/modules/vpc".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Dedicated,
-                },
-                ModuleConfig {
-                    name: "step-functions".to_string(),
-                    description: "Step Functions state machine".to_string(),
-                    path: "modules/step-functions".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "./lambda".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Service,
-                },
-                ModuleConfig {
-                    name: "gateway".to_string(),
-                    description: "API Gateway configuration".to_string(),
-                    path: "modules/gateway".to_string(),
-                    dependencies: vec![
-                        crate::common::service_config::DependencyReference {
-                            path: "./step-functions".to_string(),
-                            environment: "ephemeral".to_string(),
-                        },
-                    ],
-                    state_management: crate::common::service_config::StateManagement::Service,
-                },
-            ],
-            dependencies: vec!["../database".to_string(), "../networking".to_string()],
-        };
-
-        let content = serde_yaml::to_string(&config)?;
-        std::fs::write(service_dir.join("envie.yaml"), content)?;
-
-        // Create example Terraform files
-        self.create_example_terraform_files(&service_dir)?;
-
-        Ok(())
-    }
-
-    fn create_example_terraform_files(&self, service_dir: &Path) -> Result<()> {
-        // Create a simple main.tf file for each module
-        for module_dir in std::fs::read_dir(service_dir.join("modules"))? {
-            let module_dir = module_dir?;
-            if module_dir.file_type()?.is_dir() {
-                let main_tf = module_dir.path().join("main.tf");
-                let content = format!(
-                    r#"# {module_name} Module
-# This is an example Terraform module for {module_name}
-
-resource "null_resource" "example" {{
-  provisioner "local-exec" {{
-    command = "echo 'Hello from {module_name} module'"
-  }}
-}}
-
-output "example_output" {{
-  value = "This is output from {module_name} module"
-  description = "Example output from {module_name} module"
-}}
-"#,
-                    module_name = module_dir.file_name().to_string_lossy()
-                );
-                std::fs::write(main_tf, content)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn update_gitignore(&self) -> Result<()> {
-        let gitignore_path = self.working_directory.join(".gitignore");
-        let mut gitignore_content = if gitignore_path.exists() {
-            std::fs::read_to_string(&gitignore_path)?
-        } else {
-            String::new()
-        };
-
-        let envie_entries = "\n# Envie generated files (auto-generated, should not be committed)\n*.envie.tf\n\n# Terraform files\n.terraform/\n.terraform.lock.hcl\n*.tfstate\n*.tfstate.*\nterraform.tfvars\n";
-
-        if !gitignore_content.contains("*.envie.tf") {
-            gitignore_content.push_str(envie_entries);
-            std::fs::write(gitignore_path, gitignore_content)?;
-        }
-
-        Ok(())
-    }
-
-    fn create_readme(&self, project_info: &ProjectInfo) -> Result<()> {
-        let readme_content = format!(
-            r#"# {project_name}
-
-{project_description}
-
-This project is managed by [Envie](https://github.com/your-org/envie), a tool for managing multiple ephemeral environments in Terraform with layered dependencies and resource sharing.
-
-## Project Structure
-
-```
-├── workspace.envie.yaml     # Global project configuration
-├── services/                # Units directory
-│   ├── networking/          # Networking infrastructure
-│   │   ├── envie.yaml      # Unit configuration
-│   │   └── modules/        # Terraform modules
-│   ├── database/            # Database layer
-│   │   ├── envie.yaml      # Unit configuration
-│   │   └── modules/        # Terraform modules
-│   └── api/                 # API layer
-│       ├── envie.yaml      # Unit configuration
-│       └── modules/        # Terraform modules
-└── README.md                # This file
-```
-
-## Quick Start
-
-1. **Deploy a service:**
-   ```bash
-   envie deploy --service networking --merge-request 123
-   ```
-
-2. **Deploy with environment overrides:**
-   ```bash
-   envie deploy --service api --merge-request 123 -E database:stable.sandbox
-   ```
-
-3. **List available services:**
-   ```bash
-   envie list
-   ```
-
-## Configuration
-
-- `workspace.envie.yaml`: Global project configuration with environment definitions
-- `services/*/envie.yaml`: Per-unit configuration with dependencies
-
-## Environments
-
-- **Ephemeral**: Temporary environments for development (e.g., MR 123)
-- **Stable**: Long-lived environments for shared resources
-  - `stable.sandbox`: Development sandbox
-  - `stable.staging`: Staging environment
-  - `stable.production`: Production environment
-
-## Dependencies
-
-Services can depend on other services using relative paths:
-- `../networking`: Reference to networking service
-- `./lambda`: Reference to lambda module within same service
-
-## More Information
-
-For more information about Envie, see the [documentation](https://github.com/your-org/envie/docs).
-"#,
-            project_name = project_info.name,
-            project_description = project_info.description
-        );
-
-        std::fs::write(self.working_directory.join("README.md"), readme_content)?;
         Ok(())
     }
 }

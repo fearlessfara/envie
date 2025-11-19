@@ -23,63 +23,46 @@ cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```
 
-### 2. Initialize Project
+### 2. Initialize Workspace
 
 ```bash
-# Create new project with example services
-envie init --name myapp
-
-# This creates:
-#   - workspace.envie.yaml (project config)
-#   - services/ (units directory)
-#   - 3 example services (networking, database, api)
+# Create workspace configuration
+cd myproject/
+envie init --project --name myapp
 ```
 
-### 3. Scaffold Additional Units
+### 3. Create Units
 
 ```bash
-# Create new units with templates
-envie scaffold auth --template api
-envie gen worker -t compute           # Short alias
+# Create unit directories manually
+mkdir -p services/auth services/database
 
-# Or interactively choose template
-envie scaffold myservice
+# Initialize each unit (creates envie.yaml)
+envie init --unit services/auth
+envie init --unit services/database
+
+# Add your Terraform code
+# services/auth/main.tf
+# services/database/main.tf
 ```
 
-**Available Templates:**
-- `simple` - Basic unit with single main.tf
-- `with-modules` - Multi-module unit structure
-- `networking` - VPC, subnets, security groups
-- `database` - DynamoDB, RDS
-- `api` - Lambda + API Gateway
-- `compute` - Lambda functions
-
-### 4. Deploy to Environment
+### 4. Deploy
 
 ```bash
-# Preview deployment (dry-run)
-envie plan --unit api --env dev-123
+# Deploy units (terraform-like commands)
+envie deploy --unit auth --env dev-123
+envie destroy --unit auth --env dev-123
+envie output --unit auth --env dev-123
+envie refresh --unit auth --env dev-123
+```
 
-# Deploy to ephemeral environment
-envie deploy --unit api --env dev-123
+### 5. Advanced: Environment Overrides
 
+```bash
 # Deploy with stable dependencies
-envie deploy --unit api --env feature-auth \
+envie deploy --unit auth --env feature-branch \
   -E database:stable.sandbox \
   -E networking:stable.sandbox
-```
-
-### 5. Manage Environments
-
-```bash
-# List all deployed units
-envie list
-
-# Get outputs from environment
-envie output --env dev-123
-
-# Clean up when done
-envie delete --env dev-123
 ```
 
 ## 📚 Documentation

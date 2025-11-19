@@ -65,8 +65,8 @@ Located in `tests/init_tests.rs`. These test the `envie init` command thoroughly
 - Valid YAML configuration files throughout
 - Proper dependency chain: networking → database → API
 
-### Scaffold Command Tests (`cargo test --test scaffold_command_tests`)
-Located in `tests/scaffold_command_tests.rs`. These test the `envie scaffold` command for scaffolding individual units:
+### Init Command Tests (`cargo test --test init_command_tests`)
+Located in `tests/init_command_tests.rs`. These test the `envie init` command for scaffolding individual units:
 
 - **Template Support**: Tests all 6 templates (simple, with-modules, networking, database, api, compute)
 - **Simple Template**: Tests basic unit with single main.tf
@@ -187,7 +187,7 @@ cargo test --test cli_tests
 cargo test --test init_tests
 
 # Run only new command tests
-cargo test --test scaffold_command_tests
+cargo test --test init_command_tests
 
 # Run only workspace safety tests
 cargo test --test workspace_safety_tests
@@ -205,7 +205,7 @@ cargo test --test e2e_terraform_validation_tests
 cargo test --test e2e_terraform_syntax_tests
 
 # Run all integration test suites
-cargo test --test integration_tests --test cli_tests --test init_tests --test scaffold_command_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
+cargo test --test integration_tests --test cli_tests --test init_tests --test init_command_tests --test workspace_safety_tests --test dependency_resolution_tests --test error_handling_tests --test e2e_terraform_validation_tests --test e2e_terraform_syntax_tests
 
 # Run specific test
 cargo test test_unit_discovery
@@ -387,7 +387,7 @@ Given the criticality of this tool (managing infrastructure deployments), we aim
 | Integration Tests | 8 | ✅ All passing | Test complete workflows |
 | CLI Tests | 14 | ✅ All passing | Test command-line interface |
 | **Init Tests** | **18** | **✅ All passing** | **Test project initialization command** |
-| **Scaffold Command Tests** | **18** | **✅ All passing** | **Test unit scaffolding command** |
+| **Init Command Tests** | **18** | **✅ All passing** | **Test unit scaffolding command** |
 | Workspace Safety | 12 | ✅ All passing | Test workspace isolation and safety |
 | Dependency Resolution | 14 | ✅ All passing | Test complex dependency graphs |
 | Error Handling | 19 | ✅ All passing | Test error scenarios and edge cases |
