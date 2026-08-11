@@ -355,31 +355,24 @@ envie deploy --unit api --env dev-123 --verbose
 Check what was created:
 
 ```bash
-# List all units and their workspaces
+# List the environments that exist
 envie list
 ```
 
 **Output**:
 ```
-📋 Listing all discovered units and their workspaces...
+📋 Environments in myapp
 
-Active workspaces by unit:
+Long-lived
+  production  no deployment recorded
+              workspace default, state in s3://myapp-terraform-state
 
-📦 dynamodb (Component)
-   Path: services/database/modules/dynamodb
-   Workspaces:
-     • myapp-sandbox
-
-📦 vpc (Component)
-   Path: services/networking/modules/vpc
-   Workspaces:
-     • myapp-dev-123
-
-📦 lambda (Component)
-   Path: services/api/modules/lambda
-   Workspaces:
-     • myapp-dev-123
+Ephemeral
+  dev-123     deployed 2026-08-11 22:03 UTC (vpc, dynamodb, lambda)
+              workspace myapp-dev-123, state in s3://myapp-terraform-state
 ```
+
+Add `--json` when a script needs to check whether an environment is still up.
 
 ## Step 8: Override Environment References
 
@@ -598,7 +591,7 @@ Envie auto-detects you're in a unit directory.
 ```bash
 envie list
 ```
-See all units and their active workspaces.
+See every environment that exists, and what each one has deployed.
 
 ### 5. View Unit Details
 ```bash

@@ -147,8 +147,12 @@ pub enum Commands {
         #[arg(long)]
         file: Option<PathBuf>,
     },
-    /// List the units in this project
-    List,
+    /// List the environments this project has, declared and deployed
+    List {
+        /// Print the environments as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Show the Terraform outputs of an environment
     Output {
         /// The ID of the environment to get outputs from

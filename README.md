@@ -17,6 +17,9 @@ Envie never edits your Terraform. It reads it, and adds files of its own.
 brew install fearlessfara/tap/envie
 ```
 
+Homebrew warns that the tap is not trusted, because it is not an official one.
+To silence that on every later upgrade, `brew trust --tap fearlessfara/tap`.
+
 Or build from source:
 
 ```bash
@@ -39,7 +42,8 @@ credential chain.
    ```
 
 3. The [release workflow](.github/workflows/release.yml) builds a universal macOS
-   binary, attaches it to the GitHub Release, and updates
+   binary and static Linux binaries for x86_64 and aarch64, attaches them to the
+   GitHub Release with their checksums, and updates
    [`fearlessfara/homebrew-tap`](https://github.com/fearlessfara/homebrew-tap).
 
 The tap bump needs a `HOMEBREW_TAP_TOKEN` secret on this repository (a token with
@@ -158,6 +162,29 @@ envie/{environment}/{unit_path}/terraform.tfstate      # stable
 An adopted environment overrides this with the literal paths it already had,
 recorded as `state_keys` in `workspace.envie.yaml`.
 
+### Which environments exist
+
+`envie list` answers that. The long-lived ones come from `workspace.envie.yaml`,
+but an ephemeral environment exists only because somebody deployed it — often
+somebody else, from another machine — so those are read back out of the
+deployment records in the state backend:
+
+```
+📋 Environments in acme
+
+Long-lived
+  prod   deployed 2026-08-11 22:03 UTC (api, network)
+         workspace default, state in s3://acme-state
+
+Ephemeral
+  pr-42  deployed 2026-08-11 21:40 UTC (api)
+         workspace acme-pr-42, state in s3://acme-state
+```
+
+`--json` gives the same answer to a pipeline deciding whether an environment is
+still up. Nothing is deployed, destroyed or initialised to produce this list, and
+a backend Envie cannot read is reported rather than quietly left out.
+
 ## What Envie writes into your modules
 
 Two files per root module, regenerated on every deploy and safe to delete:
@@ -177,7 +204,10 @@ backend block keeps working as written.
 Envie also records what each deploy did, in the state backend under
 `envie/manifests/{environment}.json`: which units were deployed, and which
 environment each of their dependencies was read from. That is what lets
-`envie destroy` reproduce a deployment nobody remembers the flags for.
+`envie destroy` reproduce a deployment nobody remembers the flags for, and what
+`envie list` reads to find environments that exist but are declared nowhere.
+Tearing an environment down takes it back out of the record, so a destroyed
+environment stops being reported as deployed.
 
 ## Commands
 
@@ -188,8 +218,9 @@ environment each of their dependencies was read from. That is what lets
 | `envie deploy --env <id>` | Deploy an environment |
 | `envie destroy --env <id>` | Destroy an environment's infrastructure |
 | `envie delete --env <id>` | Destroy an ephemeral environment and remove its state |
-| `envie list` | Show units and their dependencies |
-| `envie show` / `envie output` | Inspect an environment and its outputs |
+| `envie list` | Show which environments exist, declared and deployed |
+| `envie show` | Show units and their dependencies |
+| `envie output --env <id>` | Show an environment's Terraform outputs |
 | `envie generate --env <id>` | Fill a `.env` template from an environment's outputs |
 | `envie clean` | Remove generated files |
 

@@ -132,9 +132,9 @@ impl CommandHandler {
                 let generator = GenerateCommand::new(self.working_directory.clone());
                 generator.execute(options).await
             }
-            Commands::List => {
+            Commands::List { json } => {
                 let lister = ListCommand::new(self.working_directory.clone());
-                lister.list()
+                lister.execute(ListOptions { json })
             }
             Commands::Output {
                 env,

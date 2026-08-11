@@ -101,9 +101,26 @@ impl DestroyCommand {
             println!("  ✅ destroyed\n");
         }
 
+        self.forget_deployment(&planner.project().root, &plan);
+
         self.output_manager
             .print_green(&format!("✅ {} is torn down.", plan.environment.name));
         Ok(())
+    }
+
+    /// Take what was just destroyed out of the deployment record, so that
+    /// `envie list` stops reporting it as deployed.
+    ///
+    /// As when recording a deploy, the record is bookkeeping: failing to update
+    /// it does not undo a teardown that worked.
+    fn forget_deployment(&self, root: &std::path::Path, plan: &Plan) {
+        let destroyed: Vec<String> = plan.units.iter().map(|unit| unit.name.clone()).collect();
+        if let Err(error) = manifest::forget(root, &plan.environment, &destroyed) {
+            self.output_manager.print_yellow(&format!(
+                "⚠️  Torn down, but the record of it could not be updated: {}",
+                error
+            ));
+        }
     }
 
     fn confirm_stable_destroy(&self, plan: &Plan) -> Result<()> {

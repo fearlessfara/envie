@@ -12,7 +12,7 @@
 //! on the machine that happened to run the deploy.
 
 use crate::common::deployment::Plan;
-use crate::common::environment::ResolvedEnvironment;
+use crate::common::environment::{BackendConfig, EnvironmentConfig, ResolvedEnvironment};
 use crate::common::{EnvieError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -123,30 +123,178 @@ impl EnvironmentManifest {
     }
 }
 
-/// Where an environment's record is kept.
-enum Location {
+/// Where a backend's records are kept, as a set rather than one at a time, so
+/// that the environments a project has can be listed and not only looked up.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Store {
     S3 {
         bucket: String,
-        key: String,
         region: Option<String>,
     },
-    File(PathBuf),
+    Directory(PathBuf),
 }
 
-fn location(root: &Path, environment: &ResolvedEnvironment) -> Location {
-    let name = format!("{}.json", environment.name);
+const S3_PREFIX: &str = "envie/manifests/";
 
-    if environment.backend.backend_type == "s3" {
-        if let Some(bucket) = environment.backend.config.get("bucket") {
-            return Location::S3 {
+/// What an AWS CLI failure was actually about, without its framing.
+fn aws_failure(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+        .map(|line| {
+            line.trim_start_matches("aws: ")
+                .trim_start_matches("[ERROR]: ")
+                .to_string()
+        })
+        .unwrap_or_else(|| "the aws CLI failed".to_string())
+}
+
+fn store(root: &Path, backend: &BackendConfig) -> Store {
+    if backend.backend_type == "s3" {
+        if let Some(bucket) = backend.config.get("bucket") {
+            return Store::S3 {
                 bucket: bucket.clone(),
-                key: format!("envie/manifests/{}", name),
-                region: environment.backend.config.get("region").cloned(),
+                region: backend.config.get("region").cloned(),
             };
         }
     }
 
-    Location::File(root.join(".envie").join("manifests").join(name))
+    Store::Directory(root.join(".envie").join("manifests"))
+}
+
+fn file_name(environment: &str) -> String {
+    format!("{}.json", environment)
+}
+
+impl Store {
+    fn key(&self, environment: &str) -> String {
+        format!("{}{}", S3_PREFIX, file_name(environment))
+    }
+
+    /// How to refer to this store when telling someone where a record came from.
+    fn describe(&self) -> String {
+        match self {
+            Store::S3 { bucket, .. } => format!("s3://{}/{}", bucket, S3_PREFIX),
+            Store::Directory(directory) => directory.display().to_string(),
+        }
+    }
+
+    fn region_arguments(&self) -> Vec<String> {
+        match self {
+            Store::S3 {
+                region: Some(region),
+                ..
+            } => vec!["--region".to_string(), region.clone()],
+            _ => Vec::new(),
+        }
+    }
+
+    /// The environments this store holds a record for.
+    ///
+    /// The failure is a plain sentence rather than an `EnvieError` because it is
+    /// shown to somebody who asked what environments exist, not raised at them.
+    fn environment_names(&self) -> std::result::Result<Vec<String>, String> {
+        match self {
+            Store::Directory(directory) => {
+                if !directory.exists() {
+                    return Ok(Vec::new());
+                }
+
+                let mut names = Vec::new();
+                for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+                    let path = entry.map_err(|e| e.to_string())?.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                        continue;
+                    }
+                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                        names.push(name.to_string());
+                    }
+                }
+                names.sort();
+                Ok(names)
+            }
+            Store::S3 { bucket, .. } => {
+                let mut command = Command::new("aws");
+                command.args([
+                    "s3api",
+                    "list-objects-v2",
+                    "--bucket",
+                    bucket,
+                    "--prefix",
+                    S3_PREFIX,
+                    "--output",
+                    "json",
+                ]);
+                command.args(self.region_arguments());
+
+                let output = command
+                    .output()
+                    .map_err(|e| format!("the aws CLI could not be run ({})", e))?;
+                if !output.status.success() {
+                    return Err(aws_failure(&output.stderr));
+                }
+
+                let listing: serde_json::Value = serde_json::from_slice(&output.stdout)
+                    .unwrap_or(serde_json::Value::Object(Default::default()));
+
+                let mut names: Vec<String> = listing["Contents"]
+                    .as_array()
+                    .map(|contents| contents.as_slice())
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|object| object["Key"].as_str())
+                    .filter_map(|key| key.strip_prefix(S3_PREFIX))
+                    .filter_map(|name| name.strip_suffix(".json"))
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                names.sort();
+                Ok(names)
+            }
+        }
+    }
+
+    fn read(&self, environment: &str) -> Result<Option<String>> {
+        match self {
+            Store::Directory(directory) => {
+                let path = directory.join(file_name(environment));
+                if !path.exists() {
+                    return Ok(None);
+                }
+                Ok(Some(std::fs::read_to_string(path)?))
+            }
+            Store::S3 { bucket, .. } => {
+                let destination = std::env::temp_dir().join(format!(
+                    "envie-manifest-read-{}-{}.json",
+                    environment,
+                    std::process::id()
+                ));
+
+                let mut command = Command::new("aws");
+                command.args([
+                    "s3api",
+                    "get-object",
+                    "--bucket",
+                    bucket,
+                    "--key",
+                    &self.key(environment),
+                    &destination.to_string_lossy(),
+                ]);
+                command.args(self.region_arguments());
+
+                let output = command.output()?;
+                if !output.status.success() {
+                    let _ = std::fs::remove_file(&destination);
+                    return Ok(None);
+                }
+
+                let body = std::fs::read_to_string(&destination)?;
+                let _ = std::fs::remove_file(&destination);
+                Ok(Some(body))
+            }
+        }
+    }
 }
 
 /// Record a deployment, keeping anything an earlier deploy recorded.
@@ -163,15 +311,41 @@ pub fn save(
         None => manifest,
     };
 
-    let body = serde_json::to_string_pretty(&merged)
+    write(root, environment, &merged)
+}
+
+/// Drop the units a teardown removed, and the environment itself once its record
+/// describes nothing.
+///
+/// Without this, an environment that has been destroyed keeps looking deployed to
+/// anyone asking what exists.
+pub fn forget(root: &Path, environment: &ResolvedEnvironment, units: &[String]) -> Result<()> {
+    let Some(mut existing) = load(root, environment)? else {
+        return Ok(());
+    };
+
+    existing.units.retain(|name, _| !units.contains(name));
+
+    if existing.units.is_empty() {
+        return remove(root, environment);
+    }
+
+    existing.updated_at = chrono::Utc::now().to_rfc3339();
+    write(root, environment, &existing)
+}
+
+fn write(
+    root: &Path,
+    environment: &ResolvedEnvironment,
+    manifest: &EnvironmentManifest,
+) -> Result<()> {
+    let body = serde_json::to_string_pretty(manifest)
         .map_err(|e| EnvieError::ConfigError(format!("could not serialise the manifest: {}", e)))?;
 
-    match location(root, environment) {
-        Location::S3 {
-            bucket,
-            key,
-            region,
-        } => {
+    let store = store(root, &environment.backend);
+    match &store {
+        Store::S3 { bucket, .. } => {
+            let key = store.key(&environment.name);
             let temporary = std::env::temp_dir().join(format!(
                 "envie-manifest-{}-{}.json",
                 environment.name,
@@ -184,7 +358,7 @@ pub fn save(
                 "s3api",
                 "put-object",
                 "--bucket",
-                &bucket,
+                bucket,
                 "--key",
                 &key,
                 "--body",
@@ -192,9 +366,7 @@ pub fn save(
                 "--content-type",
                 "application/json",
             ]);
-            if let Some(region) = &region {
-                command.args(["--region", region]);
-            }
+            command.args(store.region_arguments());
 
             let output = command.output();
             let _ = std::fs::remove_file(&temporary);
@@ -211,9 +383,9 @@ pub fn save(
                 )));
             }
         }
-        Location::File(path) => {
-            std::fs::create_dir_all(path.parent().unwrap())?;
-            std::fs::write(path, body)?;
+        Store::Directory(directory) => {
+            std::fs::create_dir_all(directory)?;
+            std::fs::write(directory.join(file_name(&environment.name)), body)?;
         }
     }
 
@@ -225,48 +397,9 @@ pub fn save(
 /// A missing record is normal: the environment may predate this version of
 /// Envie, or may never have been deployed.
 pub fn load(root: &Path, environment: &ResolvedEnvironment) -> Result<Option<EnvironmentManifest>> {
-    let body = match location(root, environment) {
-        Location::S3 {
-            bucket,
-            key,
-            region,
-        } => {
-            let destination = std::env::temp_dir().join(format!(
-                "envie-manifest-read-{}-{}.json",
-                environment.name,
-                std::process::id()
-            ));
-
-            let mut command = Command::new("aws");
-            command.args([
-                "s3api",
-                "get-object",
-                "--bucket",
-                &bucket,
-                "--key",
-                &key,
-                &destination.to_string_lossy(),
-            ]);
-            if let Some(region) = &region {
-                command.args(["--region", region]);
-            }
-
-            let output = command.output()?;
-            if !output.status.success() {
-                let _ = std::fs::remove_file(&destination);
-                return Ok(None);
-            }
-
-            let body = std::fs::read_to_string(&destination)?;
-            let _ = std::fs::remove_file(&destination);
-            body
-        }
-        Location::File(path) => {
-            if !path.exists() {
-                return Ok(None);
-            }
-            std::fs::read_to_string(path)?
-        }
+    let body = match store(root, &environment.backend).read(&environment.name)? {
+        Some(body) => body,
+        None => return Ok(None),
     };
 
     // A record Envie cannot read is treated as absent rather than fatal: it must
@@ -276,26 +409,91 @@ pub fn load(root: &Path, environment: &ResolvedEnvironment) -> Result<Option<Env
 
 /// Forget an environment, once it no longer exists.
 pub fn remove(root: &Path, environment: &ResolvedEnvironment) -> Result<()> {
-    match location(root, environment) {
-        Location::S3 {
-            bucket,
-            key,
-            region,
-        } => {
+    let store = store(root, &environment.backend);
+    match &store {
+        Store::S3 { bucket, .. } => {
             let mut command = Command::new("aws");
-            command.args(["s3api", "delete-object", "--bucket", &bucket, "--key", &key]);
-            if let Some(region) = &region {
-                command.args(["--region", region]);
-            }
+            command.args([
+                "s3api",
+                "delete-object",
+                "--bucket",
+                bucket,
+                "--key",
+                &store.key(&environment.name),
+            ]);
+            command.args(store.region_arguments());
             let _ = command.output();
         }
-        Location::File(path) => {
+        Store::Directory(directory) => {
+            let path = directory.join(file_name(&environment.name));
             if path.exists() {
                 std::fs::remove_file(path)?;
             }
         }
     }
     Ok(())
+}
+
+/// An environment Envie has a record of.
+#[derive(Debug, Clone)]
+pub struct RecordedEnvironment {
+    pub name: String,
+    /// `None` when the record exists but cannot be read, which still tells us
+    /// the environment is out there.
+    pub manifest: Option<EnvironmentManifest>,
+    /// Where the record was found, for output that has to explain itself.
+    pub source: String,
+}
+
+/// Every environment recorded in the backends this project deploys to.
+///
+/// A backend that cannot be reached is reported rather than raised: not having
+/// credentials for one bucket should still list the environments in the others,
+/// and should never stop a project describing what it has configured.
+pub fn recorded(
+    root: &Path,
+    environments: &EnvironmentConfig,
+) -> (Vec<RecordedEnvironment>, Vec<String>) {
+    let mut stores = vec![store(root, &environments.ephemeral.backend)];
+    for stable in environments.stable.values() {
+        stores.push(store(root, &stable.backend));
+    }
+    stores.sort();
+    stores.dedup();
+
+    let mut found: Vec<RecordedEnvironment> = Vec::new();
+    let mut problems = Vec::new();
+
+    for store in stores {
+        let names = match store.environment_names() {
+            Ok(names) => names,
+            Err(error) => {
+                problems.push(format!("could not read {}: {}", store.describe(), error));
+                continue;
+            }
+        };
+
+        for name in names {
+            if found.iter().any(|existing| existing.name == name) {
+                continue;
+            }
+
+            let manifest = store
+                .read(&name)
+                .ok()
+                .flatten()
+                .and_then(|body| serde_json::from_str(&body).ok());
+
+            found.push(RecordedEnvironment {
+                name,
+                manifest,
+                source: store.describe(),
+            });
+        }
+    }
+
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    (found, problems)
 }
 
 #[cfg(test)]
@@ -366,6 +564,67 @@ mod tests {
 
         remove(directory.path(), &environment).unwrap();
         assert!(load(directory.path(), &environment).unwrap().is_none());
+    }
+
+    #[test]
+    fn destroying_part_of_an_environment_leaves_the_rest_recorded() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let environment = crate::common::environment::ResolvedEnvironment::for_tests(
+            "pr-1",
+            "demo-pr-1",
+            "local",
+        );
+        save(
+            directory.path(),
+            &environment,
+            manifest(&[("db", &[]), ("api", &[("db", "ephemeral.pr-1")])]),
+        )
+        .unwrap();
+
+        forget(directory.path(), &environment, &["api".to_string()]).unwrap();
+
+        let remaining = load(directory.path(), &environment).unwrap().unwrap();
+        assert_eq!(remaining.unit_names(), vec!["db"]);
+    }
+
+    #[test]
+    fn destroying_everything_forgets_the_environment() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let environment = crate::common::environment::ResolvedEnvironment::for_tests(
+            "pr-1",
+            "demo-pr-1",
+            "local",
+        );
+        save(
+            directory.path(),
+            &environment,
+            manifest(&[("db", &[]), ("api", &[])]),
+        )
+        .unwrap();
+
+        forget(
+            directory.path(),
+            &environment,
+            &["db".to_string(), "api".to_string()],
+        )
+        .unwrap();
+
+        assert!(
+            load(directory.path(), &environment).unwrap().is_none(),
+            "an environment with nothing left in it should not look deployed"
+        );
+    }
+
+    #[test]
+    fn forgetting_an_environment_that_was_never_recorded_is_not_an_error() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let environment = crate::common::environment::ResolvedEnvironment::for_tests(
+            "pr-1",
+            "demo-pr-1",
+            "local",
+        );
+
+        forget(directory.path(), &environment, &["api".to_string()]).unwrap();
     }
 
     #[test]
