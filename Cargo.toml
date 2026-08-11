@@ -2,23 +2,22 @@
 name = "envie"
 version = "0.1.0"
 edition = "2021"
-description = "A tool for managing multiple ephemeral environments in Terraform with layered dependencies and resource sharing"
+description = "Run many environments from one Terraform codebase, including repositories Envie did not create"
 authors = ["Christian Gennaro Faraone"]
 license = "MIT"
+readme = "README.md"
+repository = "https://github.com/fearlessfara/envie"
+homepage = "https://github.com/fearlessfara/envie"
+keywords = ["terraform", "infrastructure", "environments", "devops", "iac"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "envie"
 path = "src/main.rs"
 
-[[example]]
-name = "terraform_manager_demo"
-path = "examples/terraform_manager_demo.rs"
-
-
 [dependencies]
 # CLI and argument parsing
 clap = { version = "4.4", features = ["derive", "color"] }
-clap-num = "1.0"
 
 # Async runtime
 tokio = { version = "1.0", features = ["full"] }
@@ -29,7 +28,6 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 
 # Error handling
-anyhow = "1.0"
 thiserror = "1.0"
 
 # Logging
@@ -39,20 +37,8 @@ env_logger = "0.10"
 # File system operations
 walkdir = "2.4"
 
-# Process execution
-which = "4.4"
-
-
-
-# HTTP client
-reqwest = { version = "0.11", features = ["json"] }
-
 # Terminal colors and formatting
 colored = "2.0"
-indicatif = "0.17"
-
-# Path manipulation
-pathdiff = "0.2"
 
 # Regular expressions
 regex = "1.10"
@@ -60,16 +46,8 @@ regex = "1.10"
 # Time handling
 chrono = { version = "0.4", features = ["serde"] }
 
-# Configuration
-config = "0.14"
-
-# UUID generation
-uuid = { version = "1.6", features = ["v4", "serde"] }
-
-# Terraform integration
-terraform = "0.1"
-
+# Reading Terraform configuration
+hcl-rs = "0.19.8"
 
 [dev-dependencies]
 tempfile = "3.8"
-mockito = "1.2"

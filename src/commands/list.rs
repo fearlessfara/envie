@@ -1,6 +1,6 @@
 use crate::common::*;
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct ListCommand {
     working_directory: PathBuf,
@@ -18,18 +18,20 @@ impl ListCommand {
     pub fn list(&self) -> Result<()> {
         // Find the project root
         let project_root = self.find_project_root()?;
-        
+
         println!("📋 Listing all discovered units and their workspaces...\n");
-        
+
         // Discover all units
         let mut discovery = UnitDiscovery::new(project_root.clone());
         discovery.discover_all()?;
-        
+
         if discovery.registry.units.is_empty() {
-            self.output_manager.print_yellow("No units found. Make sure you have envie.yaml files in your project.");
+            self.output_manager.print_yellow(
+                "No units found. Make sure you have envie.yaml files in your project.",
+            );
             return Ok(());
         }
-        
+
         // Group workspaces by unit
         let mut unit_workspaces: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -51,15 +53,22 @@ impl ListCommand {
                 }
             }
         }
-        
+
         if unit_workspaces.is_empty() {
-            self.output_manager.print_yellow("No active workspaces found for any units.");
+            self.output_manager
+                .print_yellow("No active workspaces found for any units.");
             println!("\nDiscovered units:");
             for unit in discovery.registry.get_all_units() {
-                println!("  • {} ({:?}) - {}", unit.config.name, unit.config.unit_type, unit.path.display());
+                println!(
+                    "  • {} ({:?}) - {}",
+                    unit.config.name,
+                    unit.config.unit_type,
+                    unit.path.display()
+                );
             }
         } else {
-            self.output_manager.print_green("Active workspaces by unit:\n");
+            self.output_manager
+                .print_green("Active workspaces by unit:\n");
             for (unit_name, workspaces) in unit_workspaces {
                 if let Some(unit) = discovery.registry.get_unit(&unit_name) {
                     println!("📦 {} ({:?})", unit_name, unit.config.unit_type);
@@ -75,16 +84,16 @@ impl ListCommand {
 
         Ok(())
     }
-    
+
     fn find_project_root(&self) -> Result<PathBuf> {
         let mut current = self.working_directory.clone();
-        
+
         loop {
             let workspace_file = current.join("workspace.envie.yaml");
             if workspace_file.exists() {
                 return Ok(current);
             }
-            
+
             if let Some(parent) = current.parent() {
                 current = parent.to_path_buf();
             } else {

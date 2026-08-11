@@ -8,27 +8,27 @@ use std::path::PathBuf;
 pub struct UnitConfig {
     /// The name of the unit
     pub name: String,
-    
+
     /// Optional description
     #[serde(default)]
     pub description: String,
-    
+
     /// The type of unit (service, module, component, layer, application, etc.)
     #[serde(default)]
     pub unit_type: UnitType,
-    
+
     /// Path to this unit's directory (relative to project root)
     #[serde(default)]
     pub path: String,
-    
+
     /// Dependencies on other units
     #[serde(default)]
     pub dependencies: Vec<DependencyReference>,
-    
+
     /// State management strategy
     #[serde(default)]
     pub state_management: StateManagement,
-    
+
     /// Additional metadata
     #[serde(default)]
     pub metadata: HashMap<String, String>,
@@ -36,10 +36,12 @@ pub struct UnitConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum UnitType {
     /// A top-level service (e.g., API, Database, Frontend)
     Service,
     /// A module within a service (e.g., Lambda, DynamoDB)
+    #[default]
     Module,
     /// A component (e.g., VPC, Subnet, Security Group)
     Component,
@@ -49,12 +51,6 @@ pub enum UnitType {
     Application,
     /// A custom type
     Custom(String),
-}
-
-impl Default for UnitType {
-    fn default() -> Self {
-        UnitType::Module
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,8 +102,10 @@ impl DependencyReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "StateManagementString")]
+#[derive(Default)]
 pub enum StateManagement {
     /// Unit has its own dedicated state file
+    #[default]
     Dedicated,
     /// Unit is managed as part of a parent unit's state
     Parent,
@@ -141,19 +139,9 @@ impl From<StateManagementString> for StateManagement {
                     StateManagement::Dedicated // Default fallback
                 }
             }
-            StateManagementString::Object { shared } => {
-                StateManagement::Shared(shared)
-            }
-            StateManagementString::ObjectGroup { group } => {
-                StateManagement::Group(group)
-            }
+            StateManagementString::Object { shared } => StateManagement::Shared(shared),
+            StateManagementString::ObjectGroup { group } => StateManagement::Group(group),
         }
-    }
-}
-
-impl Default for StateManagement {
-    fn default() -> Self {
-        StateManagement::Dedicated
     }
 }
 
@@ -199,7 +187,7 @@ pub struct DiscoveredUnit {
     pub config: UnitConfig,
     pub path: PathBuf,
     pub qualified_name: String, // Full path-based name for disambiguation
-    pub level: usize, // Depth in the directory structure
+    pub level: usize,           // Depth in the directory structure
     pub parent: Option<PathBuf>,
     pub children: Vec<PathBuf>,
 }
@@ -218,24 +206,25 @@ impl DiscoveredUnit {
             children: Vec::new(),
         }
     }
-    
+
     pub fn is_root_level(&self) -> bool {
         self.level == 0
     }
-    
+
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
     }
-    
+
     pub fn get_relative_path_to(&self, other: &DiscoveredUnit) -> String {
         // Calculate relative path from this unit to another unit
         let self_path = &self.path;
         let other_path = &other.path;
-        
+
         // This is a simplified implementation
         // In practice, we'd use proper path resolution
         if other_path.starts_with(self_path) {
-            other_path.strip_prefix(self_path)
+            other_path
+                .strip_prefix(self_path)
                 .unwrap_or(other_path)
                 .to_string_lossy()
                 .to_string()
@@ -243,7 +232,7 @@ impl DiscoveredUnit {
             // Calculate relative path going up the tree
             let mut relative = String::new();
             let mut current_path = self_path.clone();
-            
+
             // Go up until we find a common ancestor
             while !other_path.starts_with(&current_path) {
                 relative.push_str("../");
@@ -253,12 +242,11 @@ impl DiscoveredUnit {
                     break;
                 }
             }
-            
+
             // Add the path from common ancestor to target
-            let remaining = other_path.strip_prefix(&current_path)
-                .unwrap_or(other_path);
+            let remaining = other_path.strip_prefix(&current_path).unwrap_or(other_path);
             relative.push_str(&remaining.to_string_lossy());
-            
+
             relative
         }
     }
@@ -271,6 +259,12 @@ pub struct UnitRegistry {
     pub units_by_qualified_name: HashMap<String, DiscoveredUnit>,
     pub units_by_path: HashMap<PathBuf, String>,
     pub units_by_type: HashMap<UnitType, Vec<String>>,
+}
+
+impl Default for UnitRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UnitRegistry {
@@ -292,7 +286,7 @@ impl UnitRegistry {
         // Add to units map (supports duplicates)
         self.units
             .entry(name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(unit.clone());
 
         // Add to qualified name map (must be unique)
@@ -302,12 +296,9 @@ impl UnitRegistry {
         self.units_by_path.insert(path, name.clone());
 
         // Add to type map
-        self.units_by_type
-            .entry(unit_type)
-            .or_insert_with(Vec::new)
-            .push(name);
+        self.units_by_type.entry(unit_type).or_default().push(name);
     }
-    
+
     /// Get a single unit by simple name (returns first match if duplicates exist)
     /// Use resolve_unit() for better disambiguation
     pub fn get_unit(&self, name: &str) -> Option<&DiscoveredUnit> {
@@ -328,7 +319,9 @@ impl UnitRegistry {
     }
 
     pub fn get_unit_by_path(&self, path: &PathBuf) -> Option<&DiscoveredUnit> {
-        self.units_by_path.get(path).and_then(|name| self.get_unit(name))
+        self.units_by_path
+            .get(path)
+            .and_then(|name| self.get_unit(name))
     }
 
     pub fn get_units_by_type(&self, unit_type: &UnitType) -> Vec<&DiscoveredUnit> {
@@ -380,10 +373,7 @@ impl UnitRegistry {
             .filter(|(qname, _)| {
                 qname.ends_with(name_or_path)
                     && (qname.len() == name_or_path.len()
-                        || qname
-                            .chars()
-                            .nth(qname.len() - name_or_path.len() - 1)
-                            == Some('/'))
+                        || qname.chars().nth(qname.len() - name_or_path.len() - 1) == Some('/'))
             })
             .map(|(_, unit)| unit)
             .collect();

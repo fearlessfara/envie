@@ -1,11 +1,16 @@
+use crate::common::deployment::{Plan, PlanRequest, Planner, WorkspaceMode};
+use crate::common::project::Project;
 use crate::common::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct DestroyOptions {
     pub unit_name: Option<String>,
     pub env_id: Option<String>,
+    pub environment_overrides: HashMap<String, String>,
     pub dry_run: bool,
+    pub no_prompt: bool,
     pub verbose: bool,
 }
 
@@ -23,210 +28,144 @@ impl DestroyCommand {
     }
 
     pub async fn execute(&self, options: DestroyOptions) -> Result<()> {
-        // Find the project root
-        let project_root = self.find_project_root()?;
-
-        if options.verbose {
-            println!("🗑️  Starting destroy with flexible unit discovery...");
-            println!("📂 Project root: {}", project_root.display());
-        }
-
-        // Discover all units
-        let mut discovery = UnitDiscovery::new(project_root.clone());
-        discovery.discover_all()?;
-
-        if discovery.registry.units.is_empty() {
-            return Err(EnvieError::ValidationError(
-                "No deployable units found. Make sure you have envie.yaml files in your project.".to_string()
-            ));
-        }
-
-        // Determine environment/workspace
         let env_id = options.env_id.as_ref().ok_or_else(|| {
-            EnvieError::ValidationError("--env is required for destroy".to_string())
+            EnvieError::ValidationError(
+                "--env is required, so it is clear what is being destroyed".to_string(),
+            )
         })?;
-        let project_name = self.get_project_name(&project_root)?;
-        let workspace = format!("{}-{}", project_name, env_id);
 
-        // Validate workspace
-        if workspace == "default" {
-            return Err(EnvieError::ValidationError(
-                "Cannot destroy the 'default' workspace.".to_string()
-            ));
+        let planner = Planner::new(Project::discover(&self.working_directory)?)?;
+        let plan = planner.plan_teardown(&PlanRequest {
+            environment: env_id.clone(),
+            unit: options.unit_name.clone(),
+            environment_overrides: options.environment_overrides.clone(),
+            // Destroying a unit must not destroy what it reads from: other units
+            // in other environments may still depend on it.
+            include_dependencies: false,
+            no_prompt: options.no_prompt,
+            verbose: options.verbose,
+        })?;
+
+        for warning in &plan.warnings {
+            self.output_manager
+                .print_yellow(&format!("⚠️  {}", warning));
         }
 
-        // Determine which units to destroy
-        let units_to_destroy_unordered = if let Some(ref unit_name) = options.unit_name {
-            // Destroy specific unit(s) with disambiguation (supports path-based groups)
-            let matches = discovery.registry.resolve_unit(unit_name);
-            resolve_units_with_prompt(matches, unit_name, false)?
-        } else {
-            // Destroy all units
-            discovery.get_all_units()
-        };
-
-        // Sort in reverse topological order (dependents before dependencies)
-        let all_units_ordered = discovery.get_units_in_dependency_order()?;
-        let requested_qualified_names: std::collections::HashSet<_> =
-            units_to_destroy_unordered.iter().map(|u| &u.qualified_name).collect();
-
-        let units_to_destroy: Vec<_> = all_units_ordered
-            .into_iter()
-            .filter(|unit| requested_qualified_names.contains(&unit.qualified_name))
-            .rev()
-            .collect();
-
-        if options.dry_run {
-            if units_to_destroy.len() == 1 {
-                self.print_destroy_plan(units_to_destroy[0], &workspace)?;
-            } else {
-                self.print_destroy_all_plan(&units_to_destroy, &workspace)?;
-            }
+        if plan.units.is_empty() {
+            self.output_manager
+                .print_yellow("Nothing to destroy for this selection.");
             return Ok(());
         }
 
-        self.output_manager.print_green(&format!("🗑️  Destroying {} unit(s) for environment: {}\n", units_to_destroy.len(), env_id));
-
-        for unit in units_to_destroy {
-            // Check if workspace exists for this unit
-            let unit_path = project_root.join(&unit.path);
-            let terraform_manager = TerraformManager::new(&unit_path)
-                .with_verbose(options.verbose);
-
-            if terraform_manager.workspace_list()?.contains(&workspace) {
-                self.destroy_unit(unit, &project_root, &workspace, options.verbose).await?;
-            } else if options.verbose {
-                println!("⏭️  Skipping unit '{}' - workspace '{}' does not exist\n", unit.config.name, workspace);
-            }
+        if options.dry_run {
+            self.print_plan(&plan);
+            return Ok(());
         }
 
-        self.output_manager.print_green(&format!("\n✅ Successfully destroyed {} unit(s) for workspace: {}", units_to_destroy_unordered.len(), workspace));
-
-        Ok(())
-    }
-    
-    fn print_destroy_plan(&self, unit: &DiscoveredUnit, workspace: &str) -> Result<()> {
-        self.output_manager.print_green("🗑️  Destroy Plan (Dry Run)\n");
-
-        println!("Unit to Destroy:");
-        println!("  Name: {}", unit.config.name);
-        println!("  Type: {:?}", unit.config.unit_type);
-        println!("  Path: {}", unit.path.display());
-        println!("  Workspace: {}", workspace);
-        println!();
-
-        if !unit.config.dependencies.is_empty() {
-            println!("⚠️  Note: This unit has dependencies:");
-            for dep in &unit.config.dependencies {
-                let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
-                println!("    - {}", dep_display);
-            }
-            println!("    Dependencies will NOT be destroyed automatically.");
-            println!();
+        // Destroying a long-lived environment is not something to do by accident.
+        if plan.environment.is_stable() && !options.no_prompt {
+            self.confirm_stable_destroy(&plan)?;
         }
 
-        println!("Actions:");
-        println!("  1. Select workspace '{}'", workspace);
-        println!("  2. Run terraform destroy");
-        println!("  3. Delete workspace '{}'", workspace);
+        self.output_manager.print_green(&format!(
+            "\n🗑️  Destroying {} unit(s) in {}\n",
+            plan.units.len(),
+            plan.environment.name
+        ));
 
-        Ok(())
-    }
+        for unit in plan.teardown_order() {
+            self.output_manager.print_blue(&unit.name);
 
-    fn print_destroy_all_plan(&self, units: &[&DiscoveredUnit], workspace: &str) -> Result<()> {
-        self.output_manager.print_green("🗑️  Destroy All Units Plan (Dry Run)\n");
+            let Some(terraform) = unit.prepare(
+                &plan.project_name,
+                &plan.environment,
+                // Nothing was ever deployed if the workspace is absent.
+                WorkspaceMode::RequireExisting,
+                options.verbose,
+            )?
+            else {
+                println!("  ⏭️  not deployed in this environment\n");
+                continue;
+            };
 
-        println!("Destruction Order (Reverse Topological):");
-        for (i, unit) in units.iter().enumerate() {
-            println!("  {}. {} ({:?})", i + 1, unit.config.name, unit.config.unit_type);
-            println!("     Path: {}", unit.path.display());
-            if !unit.config.dependencies.is_empty() {
-                println!("     Dependencies:");
-                for dep in &unit.config.dependencies {
-                    let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
-                    println!("       - {}", dep_display);
-                }
+            println!("  💥 terraform destroy");
+            terraform.destroy_with_var_files(&unit.var_arguments(), &unit.var_files)?;
+
+            // The workspace is only removed for throwaway environments; a stable
+            // environment keeps its workspace so its history stays intact.
+            if !plan.environment.is_stable() && plan.environment.workspace != "default" {
+                terraform.workspace_select("default")?;
+                terraform.workspace_delete(&plan.environment.workspace)?;
             }
-            println!();
+
+            println!("  ✅ destroyed\n");
         }
 
-        println!("📊 Summary:");
-        println!("  Total units to destroy: {}", units.len());
-        println!("  Workspace: {}", workspace);
-        println!();
-        println!("Actions for each unit:");
-        println!("  1. Select workspace '{}'", workspace);
-        println!("  2. Run terraform destroy");
-        println!("  3. Delete workspace '{}'", workspace);
-
+        self.output_manager
+            .print_green(&format!("✅ {} is torn down.", plan.environment.name));
         Ok(())
     }
-    
-    async fn destroy_unit(
-        &self,
-        unit: &DiscoveredUnit,
-        project_root: &PathBuf,
-        workspace: &str,
-        verbose: bool,
-    ) -> Result<()> {
-        println!("🗑️  Destroying unit: {}", unit.config.name);
-        println!("  📍 Path: {}", unit.path.display());
-        println!("  🌍 Workspace: {}", workspace);
 
-        let unit_path = project_root.join(&unit.path);
-        let terraform_manager = TerraformManager::new(&unit_path)
-            .with_verbose(verbose);
-        
-        // Select the workspace
-        println!("  🔧 Selecting workspace...");
-        terraform_manager.workspace_select(workspace)?;
-        
-        // Destroy terraform resources
-        println!("  💥 Running terraform destroy...");
-        terraform_manager.destroy(&[])?;
-        
-        // Switch back to default workspace
-        println!("  🔧 Switching to default workspace...");
-        terraform_manager.workspace_select("default")?;
-        
-        // Delete the workspace
-        println!("  🗑️  Deleting workspace...");
-        terraform_manager.workspace_delete(workspace)?;
-        
-        println!("  ✅ Unit destroyed successfully\n");
-        
+    fn confirm_stable_destroy(&self, plan: &Plan) -> Result<()> {
+        use std::io::{self, Write};
+
+        self.output_manager.print_yellow(&format!(
+            "\n⚠️  '{}' is a long-lived environment declared in workspace.envie.yaml.",
+            plan.environment.name
+        ));
+        println!("   This destroys real infrastructure in:");
+        for unit in &plan.units {
+            println!(
+                "     {} → {}",
+                unit.name,
+                unit.target.state_path().unwrap_or("<unknown state>")
+            );
+        }
+        print!("\n   Type the environment name to confirm: ");
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+
+        if input.trim() != plan.environment.name {
+            return Err(EnvieError::ValidationError("destroy cancelled".to_string()));
+        }
         Ok(())
     }
-    
-    fn find_project_root(&self) -> Result<PathBuf> {
-        let mut current = self.working_directory.clone();
-        
-        loop {
-            let workspace_file = current.join("workspace.envie.yaml");
-            if workspace_file.exists() {
-                return Ok(current);
-            }
-            
-            if let Some(parent) = current.parent() {
-                current = parent.to_path_buf();
+
+    fn print_plan(&self, plan: &Plan) {
+        self.output_manager
+            .print_green("🗑️  Destroy plan (dry run)\n");
+
+        println!(
+            "Environment: {} ({})",
+            plan.environment.name,
+            if plan.environment.is_stable() {
+                "stable"
             } else {
-                return Ok(self.working_directory.clone());
+                "ephemeral"
+            }
+        );
+        println!("Workspace:   {}", plan.environment.workspace);
+        println!();
+
+        println!("Destroy order (dependents first):");
+        for (index, unit) in plan.teardown_order().iter().enumerate() {
+            println!("  {}. {}", index + 1, unit.name);
+            println!("     path:  {}", unit.path.display());
+            if let Some(state) = unit.target.state_path() {
+                println!("     state: {}", state);
             }
         }
-    }
-    
-    fn get_project_name(&self, project_root: &PathBuf) -> Result<String> {
-        let workspace_file = project_root.join("workspace.envie.yaml");
-        if !workspace_file.exists() {
-            return Ok("envie-project".to_string());
-        }
+        println!();
 
-        let content = std::fs::read_to_string(&workspace_file)?;
-        let config: crate::common::service_config::WorkspaceConfig = serde_yaml::from_str(&content)?;
-        
-        Ok(config.project.as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "envie-project".to_string()))
+        if plan.environment.is_stable() {
+            self.output_manager.print_yellow(
+                "This is a long-lived environment; running for real will ask for confirmation.",
+            );
+        } else {
+            println!("The Terraform workspace will be removed afterwards.");
+        }
     }
 }
 
@@ -236,9 +175,22 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_destroy_command_creation() {
+    fn destroy_requires_an_environment() {
         let temp_dir = TempDir::new().unwrap();
         let destroyer = DestroyCommand::new(temp_dir.path().to_path_buf());
-        assert_eq!(destroyer.working_directory, temp_dir.path());
+
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(destroyer.execute(DestroyOptions {
+                unit_name: None,
+                env_id: None,
+                environment_overrides: HashMap::new(),
+                dry_run: true,
+                no_prompt: true,
+                verbose: false,
+            }))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("--env is required"), "{error}");
     }
 }

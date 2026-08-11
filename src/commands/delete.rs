@@ -1,10 +1,17 @@
+use crate::common::deployment::{Plan, PlanRequest, PlannedUnit, Planner, WorkspaceMode};
+use crate::common::project::Project;
 use crate::common::*;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::io::{self, Write};
+use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct DeleteOptions {
     pub env_id: String,
+    /// Override environment for specific dependencies, when Envie's record of the
+    /// deployment is missing or wrong.
+    pub environment_overrides: HashMap<String, String>,
     pub dry_run: bool,
     pub no_prompt: bool,
     pub verbose: bool,
@@ -23,258 +30,224 @@ impl DeleteCommand {
         }
     }
 
+    /// Destroy an environment's infrastructure and then remove its state.
+    ///
+    /// Unlike `destroy`, this leaves nothing behind, so the environment id can be
+    /// reused from scratch. The state backend itself is never deleted: it is
+    /// shared with every other environment, and on an adopted repository it
+    /// belongs to the repository rather than to Envie.
     pub async fn execute(&self, options: DeleteOptions) -> Result<()> {
-        // Find the project root
-        let project_root = self.find_project_root()?;
+        let planner = Planner::new(Project::discover(&self.working_directory)?)?;
+        let plan = planner.plan_teardown(&PlanRequest {
+            environment: options.env_id.clone(),
+            unit: None,
+            environment_overrides: options.environment_overrides.clone(),
+            include_dependencies: false,
+            no_prompt: options.no_prompt,
+            verbose: options.verbose,
+        })?;
 
-        if options.verbose {
-            println!("🗑️  Starting complete deletion for environment: {}", options.env_id);
-            println!("📂 Project root: {}", project_root.display());
+        for warning in &plan.warnings {
+            self.output_manager
+                .print_yellow(&format!("⚠️  {}", warning));
         }
 
-        // Discover all units
-        let mut discovery = UnitDiscovery::new(project_root.clone());
-        discovery.discover_all()?;
-
-        if discovery.registry.units.is_empty() {
-            return Err(EnvieError::ValidationError(
-                "No deployable units found. Make sure you have envie.yaml files in your project.".to_string()
-            ));
+        if plan.environment.is_stable() {
+            return Err(EnvieError::ValidationError(format!(
+                "'{}' is a long-lived environment declared in workspace.envie.yaml.\n\
+                 `envie delete` only removes throwaway environments. To tear down '{}', run \
+                 `envie destroy --env {}`, and remove it from workspace.envie.yaml if it is \
+                 really going away.",
+                plan.environment.name, plan.environment.name, plan.environment.name
+            )));
         }
 
-        let project_name = self.get_project_name(&project_root)?;
-        let workspace = format!("{}-{}", project_name, options.env_id);
-
-        // Validate workspace
-        if workspace == "default" {
-            return Err(EnvieError::ValidationError(
-                "Cannot delete the 'default' workspace.".to_string()
-            ));
-        }
-
-        // Get units to delete
-        let units_in_order = discovery.get_units_in_dependency_order()?;
-        let units_to_delete: Vec<_> = units_in_order.into_iter().rev().collect();
-
-        if options.dry_run {
-            self.print_delete_plan(&units_to_delete, &workspace, &options.env_id)?;
+        if plan.units.is_empty() {
+            self.output_manager.print_yellow("Nothing to delete.");
             return Ok(());
         }
 
-        // Prompt for confirmation unless --no-prompt
+        if options.dry_run {
+            self.print_plan(&plan);
+            return Ok(());
+        }
+
         if !options.no_prompt {
             self.output_manager.print_yellow(&format!(
-                "\n⚠️  WARNING: This will permanently delete all resources and state management infrastructure for environment: {}\n",
-                options.env_id
+                "\n⚠️  This destroys everything in '{}' and deletes its state.",
+                plan.environment.name
             ));
-            println!("This includes:");
-            println!("  • All Terraform resources across {} units", units_to_delete.len());
-            println!("  • S3 bucket: {}-state-{}", project_name, options.env_id);
-            println!("  • DynamoDB table: {}-locks-{}", project_name, options.env_id);
-            println!("\n⚠️  This action CANNOT be undone!");
-
-            print!("\nType 'yes' to confirm deletion: ");
+            print!("Type 'yes' to continue: ");
             io::stdout().flush()?;
-
             let mut input = String::new();
             io::stdin().read_line(&mut input)?;
-
             if input.trim() != "yes" {
-                println!("❌ Deletion cancelled.");
+                println!("Cancelled.");
                 return Ok(());
             }
         }
 
-        self.output_manager.print_green(&format!("🗑️  Deleting environment: {}\n", options.env_id));
+        self.output_manager
+            .print_blue("\nStep 1: destroying infrastructure\n");
+        for unit in plan.teardown_order() {
+            println!("  {}", unit.name);
+            let Some(terraform) = unit.prepare(
+                &plan.project_name,
+                &plan.environment,
+                WorkspaceMode::RequireExisting,
+                options.verbose,
+            )?
+            else {
+                println!("    ⏭️  not deployed\n");
+                continue;
+            };
 
-        // Step 1: Destroy all terraform resources
-        self.output_manager.print_blue("Step 1: Destroying Terraform resources...\n");
-
-        for unit in &units_to_delete {
-            let unit_path = project_root.join(&unit.path);
-            let terraform_manager = TerraformManager::new(&unit_path)
-                .with_verbose(options.verbose);
-
-            if terraform_manager.workspace_list()?.contains(&workspace) {
-                self.destroy_unit(unit, &project_root, &workspace, options.verbose).await?;
-            } else if options.verbose {
-                println!("⏭️  Skipping unit '{}' - workspace '{}' does not exist\n", unit.config.name, workspace);
-            }
+            terraform.destroy_with_var_files(&unit.var_arguments(), &unit.var_files)?;
+            terraform.workspace_select("default")?;
+            terraform.workspace_delete(&plan.environment.workspace)?;
+            println!("    ✅ destroyed\n");
         }
 
-        // Step 2: Delete backend infrastructure
-        self.output_manager.print_blue("Step 2: Deleting state management infrastructure...\n");
-        self.delete_backend_infrastructure(&project_name, &options.env_id).await?;
+        self.output_manager.print_blue("Step 2: removing state\n");
+        // Every unit's state is swept, not just the ones that were destroyed: an
+        // interrupted run can leave state behind for a unit that never got as far
+        // as creating anything, and leaving it would make the environment id
+        // impossible to reuse cleanly.
+        for unit in &self.all_units(&planner, &options)?.units {
+            self.delete_state(&plan, unit, options.verbose)?;
+        }
+        manifest::remove(&planner.project().root, &plan.environment)?;
 
-        self.output_manager.print_green(&format!("\n✅ Successfully deleted environment: {}", options.env_id));
-        println!("   All resources and state management infrastructure have been removed.");
-
+        self.output_manager.print_green(&format!(
+            "\n✅ '{}' is gone. The state backend was left untouched.",
+            plan.environment.name
+        ));
         Ok(())
     }
 
-    fn print_delete_plan(&self, units: &[&DiscoveredUnit], workspace: &str, env_id: &str) -> Result<()> {
-        self.output_manager.print_green("🗑️  Complete Deletion Plan (Dry Run)\n");
+    /// Every unit in the project, with the state path it would have in this
+    /// environment. Dependency overrides are irrelevant here: where state lives
+    /// depends only on the unit and the environment.
+    fn all_units(&self, planner: &Planner, options: &DeleteOptions) -> Result<Plan> {
+        planner.plan(&PlanRequest {
+            environment: options.env_id.clone(),
+            unit: None,
+            environment_overrides: HashMap::new(),
+            include_dependencies: false,
+            no_prompt: options.no_prompt,
+            verbose: options.verbose,
+        })
+    }
 
-        println!("Environment: {}", env_id);
-        println!("Workspace: {}", workspace);
-        println!();
+    /// Remove a unit's state object for this environment.
+    ///
+    /// Terraform stores a non-default workspace under `<prefix>/<workspace>/<key>`
+    /// and only the default workspace at the bare key. Exactly one of those is
+    /// this environment's, and the other may well be another environment's — a
+    /// repository that separates environments by workspace uses the same key for
+    /// all of them — so only the one in use is removed.
+    fn delete_state(&self, plan: &Plan, unit: &PlannedUnit, verbose: bool) -> Result<()> {
+        let Some(key) = unit.target.state_path() else {
+            return Ok(());
+        };
 
-        println!("Step 1: Destroy Terraform Resources");
-        println!("Destruction Order (Reverse Topological):");
-        for (i, unit) in units.iter().enumerate() {
-            println!("  {}. {} ({:?})", i + 1, unit.config.name, unit.config.unit_type);
-            println!("     Path: {}", unit.path.display());
-            if !unit.config.dependencies.is_empty() {
-                println!("     Dependencies:");
-                for dep in &unit.config.dependencies {
-                    let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
-                    println!("       - {}", dep_display);
+        match plan.environment.backend.backend_type.as_str() {
+            "s3" => {
+                let Some(bucket) = plan.environment.backend.config.get("bucket") else {
+                    return Ok(());
+                };
+                let region = plan.environment.backend.config.get("region");
+                let prefix = plan
+                    .environment
+                    .backend
+                    .config
+                    .get("workspace_key_prefix")
+                    .map(String::as_str)
+                    .unwrap_or("env:");
+
+                let key = if plan.environment.workspace == "default" {
+                    key.to_string()
+                } else {
+                    format!("{}/{}/{}", prefix, plan.environment.workspace, key)
+                };
+
+                self.delete_s3_object(bucket, &key, region.map(String::as_str), verbose)?;
+            }
+            "local" => {
+                let path = unit.directory.join(key);
+                if path.exists() {
+                    std::fs::remove_file(&path)?;
+                    if verbose {
+                        println!("  removed {}", path.display());
+                    }
                 }
             }
-            println!();
+            other => {
+                self.output_manager.print_yellow(&format!(
+                    "  ⚠️  cannot remove state automatically for backend '{}'; \
+                     delete {} by hand if you want it gone",
+                    other, key
+                ));
+            }
         }
-
-        println!("Step 2: Delete State Management Infrastructure");
-        println!("  • S3 Bucket: Will be emptied and deleted");
-        println!("  • DynamoDB Table: Will be deleted");
-        println!();
-
-        println!("📊 Summary:");
-        println!("  Total units to destroy: {}", units.len());
-        println!("  Backend infrastructure: S3 + DynamoDB");
 
         Ok(())
     }
 
-    async fn destroy_unit(
+    fn delete_s3_object(
         &self,
-        unit: &DiscoveredUnit,
-        project_root: &PathBuf,
-        workspace: &str,
+        bucket: &str,
+        key: &str,
+        region: Option<&str>,
         verbose: bool,
     ) -> Result<()> {
-        println!("🗑️  Destroying unit: {}", unit.config.name);
-        println!("  📍 Path: {}", unit.path.display());
-        println!("  🌍 Workspace: {}", workspace);
+        let mut command = Command::new("aws");
+        command.args(["s3api", "delete-object", "--bucket", bucket, "--key", key]);
+        if let Some(region) = region {
+            command.args(["--region", region]);
+        }
 
-        let unit_path = project_root.join(&unit.path);
-        let terraform_manager = TerraformManager::new(&unit_path)
-            .with_verbose(verbose);
+        let output = command.output()?;
+        if output.status.success() {
+            if verbose {
+                println!("  removed s3://{}/{}", bucket, key);
+            }
+            return Ok(());
+        }
 
-        // Select the workspace
-        println!("  🔧 Selecting workspace...");
-        terraform_manager.workspace_select(workspace)?;
+        // Deleting something that is not there is the desired end state anyway.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("NoSuchKey") || stderr.contains("NoSuchBucket") {
+            return Ok(());
+        }
 
-        // Destroy terraform resources
-        println!("  💥 Running terraform destroy...");
-        terraform_manager.destroy(&[])?;
-
-        // Switch back to default workspace
-        println!("  🔧 Switching to default workspace...");
-        terraform_manager.workspace_select("default")?;
-
-        // Delete the workspace
-        println!("  🗑️  Deleting workspace...");
-        terraform_manager.workspace_delete(workspace)?;
-
-        println!("  ✅ Unit destroyed successfully\n");
-
-        Ok(())
+        Err(EnvieError::ProcessError(format!(
+            "could not delete s3://{}/{}: {}",
+            bucket,
+            key,
+            stderr.trim()
+        )))
     }
 
-    async fn delete_backend_infrastructure(&self, project_name: &str, env_id: &str) -> Result<()> {
-        let bucket_name = format!("{}-state-{}", project_name, env_id);
-        let table_name = format!("{}-locks-{}", project_name, env_id);
+    fn print_plan(&self, plan: &Plan) {
+        self.output_manager
+            .print_green("🗑️  Delete plan (dry run)\n");
+        println!("Environment: {} (ephemeral)", plan.environment.name);
+        println!("Workspace:   {}", plan.environment.workspace);
+        println!();
 
-        // Delete S3 bucket (must be emptied first)
-        println!("🗑️  Deleting S3 bucket: {}", bucket_name);
-
-        // First, empty the bucket
-        let empty_output = std::process::Command::new("aws")
-            .args(&["s3", "rm", &format!("s3://{}", bucket_name), "--recursive"])
-            .output()?;
-
-        if !empty_output.status.success() {
-            let stderr = String::from_utf8_lossy(&empty_output.stderr);
-            // Don't fail if bucket doesn't exist
-            if !stderr.contains("NoSuchBucket") {
-                return Err(EnvieError::ProcessError(
-                    format!("Failed to empty S3 bucket: {}", stderr)
-                ));
-            } else {
-                println!("  ⏭️  Bucket does not exist, skipping...");
-            }
-        } else {
-            // Then delete the bucket
-            let delete_output = std::process::Command::new("aws")
-                .args(&["s3api", "delete-bucket", "--bucket", &bucket_name])
-                .output()?;
-
-            if !delete_output.status.success() {
-                let stderr = String::from_utf8_lossy(&delete_output.stderr);
-                if !stderr.contains("NoSuchBucket") {
-                    return Err(EnvieError::ProcessError(
-                        format!("Failed to delete S3 bucket: {}", stderr)
-                    ));
-                }
-            } else {
-                println!("  ✅ S3 bucket deleted");
+        println!("Destroy, then delete state, in this order:");
+        for (index, unit) in plan.teardown_order().iter().enumerate() {
+            println!("  {}. {}", index + 1, unit.name);
+            if let Some(state) = unit.target.state_path() {
+                println!("     state: {}", state);
             }
         }
-
-        // Delete DynamoDB table
-        println!("🗑️  Deleting DynamoDB table: {}", table_name);
-
-        let table_output = std::process::Command::new("aws")
-            .args(&["dynamodb", "delete-table", "--table-name", &table_name])
-            .output()?;
-
-        if !table_output.status.success() {
-            let stderr = String::from_utf8_lossy(&table_output.stderr);
-            // Don't fail if table doesn't exist
-            if !stderr.contains("ResourceNotFoundException") {
-                return Err(EnvieError::ProcessError(
-                    format!("Failed to delete DynamoDB table: {}", stderr)
-                ));
-            } else {
-                println!("  ⏭️  Table does not exist, skipping...");
-            }
-        } else {
-            println!("  ✅ DynamoDB table deleted");
-        }
-
-        Ok(())
-    }
-
-    fn find_project_root(&self) -> Result<PathBuf> {
-        let mut current = self.working_directory.clone();
-
-        loop {
-            let workspace_file = current.join("workspace.envie.yaml");
-            if workspace_file.exists() {
-                return Ok(current);
-            }
-
-            if let Some(parent) = current.parent() {
-                current = parent.to_path_buf();
-            } else {
-                return Ok(self.working_directory.clone());
-            }
-        }
-    }
-
-    fn get_project_name(&self, project_root: &PathBuf) -> Result<String> {
-        let workspace_file = project_root.join("workspace.envie.yaml");
-        if !workspace_file.exists() {
-            return Ok("envie-project".to_string());
-        }
-
-        let content = std::fs::read_to_string(&workspace_file)?;
-        let config: crate::common::service_config::WorkspaceConfig = serde_yaml::from_str(&content)?;
-
-        Ok(config.project.as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "envie-project".to_string()))
+        println!();
+        println!(
+            "The {} backend itself is left alone.",
+            plan.environment.backend.backend_type
+        );
     }
 }
 
@@ -284,7 +257,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_delete_command_creation() {
+    fn delete_command_creation() {
         let temp_dir = TempDir::new().unwrap();
         let deleter = DeleteCommand::new(temp_dir.path().to_path_buf());
         assert_eq!(deleter.working_directory, temp_dir.path());

@@ -4,6 +4,7 @@ use std::process::Command;
 /// Manages the creation and validation of Terraform backend infrastructure (S3 + DynamoDB)
 pub struct BackendBootstrap {
     bucket_name: String,
+    /// Empty when the backend does not use a DynamoDB lock table.
     dynamodb_table: String,
     region: String,
 }
@@ -16,12 +17,18 @@ impl BackendBootstrap {
             region,
         }
     }
-    
+
+    fn uses_lock_table(&self) -> bool {
+        !self.dynamodb_table.is_empty()
+    }
+
     /// Check if the backend infrastructure exists
     pub fn check_exists(&self) -> Result<BackendStatus> {
         let bucket_exists = self.check_s3_bucket_exists()?;
-        let table_exists = self.check_dynamodb_table_exists()?;
-        
+        // A backend without a lock table has nothing to check; Terraform can lock
+        // through S3 itself.
+        let table_exists = !self.uses_lock_table() || self.check_dynamodb_table_exists()?;
+
         Ok(BackendStatus {
             bucket_exists,
             table_exists,
@@ -29,75 +36,75 @@ impl BackendBootstrap {
             dynamodb_table: self.dynamodb_table.clone(),
         })
     }
-    
+
     /// Create the backend infrastructure (S3 bucket + DynamoDB table)
     pub fn create(&self, no_prompt: bool) -> Result<()> {
         let status = self.check_exists()?;
-        
+
         if status.bucket_exists && status.table_exists {
             println!("✅ Backend infrastructure already exists");
             return Ok(());
         }
-        
+
         // Print what will be created
         println!("\n🏗️  Backend Infrastructure Setup");
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
+
         if !status.bucket_exists {
             println!("📦 S3 Bucket to create:");
             println!("   Name: {}", self.bucket_name);
             println!("   Region: {}", self.region);
             println!("   Purpose: Terraform state storage");
         }
-        
-        if !status.table_exists {
+
+        if !status.table_exists && self.uses_lock_table() {
             println!("\n🔒 DynamoDB Table to create:");
             println!("   Name: {}", self.dynamodb_table);
             println!("   Region: {}", self.region);
             println!("   Purpose: Terraform state locking");
         }
-        
+
         println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        
+
         // Ask for confirmation unless --no-prompt is set
         if !no_prompt {
             println!("\n⚠️  This will create AWS resources that may incur costs.");
             print!("Do you want to proceed? (yes/no): ");
             std::io::Write::flush(&mut std::io::stdout())?;
-            
+
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
-            
+
             let response = input.trim().to_lowercase();
             if response != "yes" && response != "y" {
                 return Err(EnvieError::ValidationError(
-                    "Backend setup cancelled by user".to_string()
+                    "Backend setup cancelled by user".to_string(),
                 ));
             }
         }
-        
+
         // Create S3 bucket if needed
         if !status.bucket_exists {
             println!("\n📦 Creating S3 bucket...");
             self.create_s3_bucket()?;
             println!("✅ S3 bucket created successfully");
         }
-        
+
         // Create DynamoDB table if needed
-        if !status.table_exists {
+        if !status.table_exists && self.uses_lock_table() {
             println!("\n🔒 Creating DynamoDB table...");
             self.create_dynamodb_table()?;
             println!("✅ DynamoDB table created successfully");
         }
-        
+
         println!("\n✅ Backend infrastructure is ready!");
-        
+
         Ok(())
     }
-    
+
     fn check_s3_bucket_exists(&self) -> Result<bool> {
         let output = Command::new("aws")
-            .args(&[
+            .args([
                 "s3api",
                 "head-bucket",
                 "--bucket",
@@ -106,16 +113,16 @@ impl BackendBootstrap {
                 &self.region,
             ])
             .output();
-        
+
         match output {
             Ok(result) => Ok(result.status.success()),
             Err(_) => Ok(false),
         }
     }
-    
+
     fn check_dynamodb_table_exists(&self) -> Result<bool> {
         let output = Command::new("aws")
-            .args(&[
+            .args([
                 "dynamodb",
                 "describe-table",
                 "--table-name",
@@ -124,19 +131,19 @@ impl BackendBootstrap {
                 &self.region,
             ])
             .output();
-        
+
         match output {
             Ok(result) => Ok(result.status.success()),
             Err(_) => Ok(false),
         }
     }
-    
+
     fn create_s3_bucket(&self) -> Result<()> {
         // Create bucket
         let create_result = if self.region == "us-east-1" {
             // us-east-1 doesn't need location constraint
             Command::new("aws")
-                .args(&[
+                .args([
                     "s3api",
                     "create-bucket",
                     "--bucket",
@@ -147,7 +154,7 @@ impl BackendBootstrap {
                 .output()
         } else {
             Command::new("aws")
-                .args(&[
+                .args([
                     "s3api",
                     "create-bucket",
                     "--bucket",
@@ -159,12 +166,12 @@ impl BackendBootstrap {
                 ])
                 .output()
         };
-        
+
         match create_result {
             Ok(output) if output.status.success() => {
                 // Enable versioning
                 let _ = Command::new("aws")
-                    .args(&[
+                    .args([
                         "s3api",
                         "put-bucket-versioning",
                         "--bucket",
@@ -175,10 +182,10 @@ impl BackendBootstrap {
                         &self.region,
                     ])
                     .output();
-                
+
                 // Enable encryption
                 let _ = Command::new("aws")
-                    .args(&[
+                    .args([
                         "s3api",
                         "put-bucket-encryption",
                         "--bucket",
@@ -189,10 +196,10 @@ impl BackendBootstrap {
                         &self.region,
                     ])
                     .output();
-                
+
                 // Block public access
                 let _ = Command::new("aws")
-                    .args(&[
+                    .args([
                         "s3api",
                         "put-public-access-block",
                         "--bucket",
@@ -203,24 +210,26 @@ impl BackendBootstrap {
                         &self.region,
                     ])
                     .output();
-                
+
                 Ok(())
             }
             Ok(output) => {
                 let error_msg = String::from_utf8_lossy(&output.stderr);
-                Err(EnvieError::ValidationError(
-                    format!("Failed to create S3 bucket: {}", error_msg)
-                ))
+                Err(EnvieError::ValidationError(format!(
+                    "Failed to create S3 bucket: {}",
+                    error_msg
+                )))
             }
-            Err(e) => Err(EnvieError::ValidationError(
-                format!("Failed to execute AWS CLI: {}", e)
-            )),
+            Err(e) => Err(EnvieError::ValidationError(format!(
+                "Failed to execute AWS CLI: {}",
+                e
+            ))),
         }
     }
-    
+
     fn create_dynamodb_table(&self) -> Result<()> {
         let output = Command::new("aws")
-            .args(&[
+            .args([
                 "dynamodb",
                 "create-table",
                 "--table-name",
@@ -235,13 +244,13 @@ impl BackendBootstrap {
                 &self.region,
             ])
             .output();
-        
+
         match output {
             Ok(result) if result.status.success() => {
                 // Wait for table to be active
                 println!("   Waiting for table to be active...");
                 let _ = Command::new("aws")
-                    .args(&[
+                    .args([
                         "dynamodb",
                         "wait",
                         "table-exists",
@@ -251,18 +260,20 @@ impl BackendBootstrap {
                         &self.region,
                     ])
                     .output();
-                
+
                 Ok(())
             }
             Ok(result) => {
                 let error_msg = String::from_utf8_lossy(&result.stderr);
-                Err(EnvieError::ValidationError(
-                    format!("Failed to create DynamoDB table: {}", error_msg)
-                ))
+                Err(EnvieError::ValidationError(format!(
+                    "Failed to create DynamoDB table: {}",
+                    error_msg
+                )))
             }
-            Err(e) => Err(EnvieError::ValidationError(
-                format!("Failed to execute AWS CLI: {}", e)
-            )),
+            Err(e) => Err(EnvieError::ValidationError(format!(
+                "Failed to execute AWS CLI: {}",
+                e
+            ))),
         }
     }
 }
@@ -280,4 +291,3 @@ impl BackendStatus {
         self.bucket_exists && self.table_exists
     }
 }
-

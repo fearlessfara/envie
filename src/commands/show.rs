@@ -1,5 +1,5 @@
-use crate::common::*;
 use crate::common::service_config::WorkspaceConfig;
+use crate::common::*;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
@@ -29,7 +29,7 @@ impl ShowCommand {
         // Discover all units using the new flexible system
         let mut discovery = UnitDiscovery::new(self.working_directory.clone());
         discovery.discover_all()?;
-        
+
         if let Some(unit_name) = &options.unit {
             // Show specific unit
             self.show_unit(unit_name, &discovery, &options)?;
@@ -58,22 +58,35 @@ impl ShowCommand {
         // Show all discovered units grouped by type
         self.output_manager.print_blue("Discovered Units:");
         println!();
-        
+
         // Group by unit type
-        for unit_type in [UnitType::Layer, UnitType::Application, UnitType::Service, UnitType::Component, UnitType::Module] {
+        for unit_type in [
+            UnitType::Layer,
+            UnitType::Application,
+            UnitType::Service,
+            UnitType::Component,
+            UnitType::Module,
+        ] {
             let units = discovery.get_units_by_type(&unit_type);
             if !units.is_empty() {
                 println!("  {:?}:", unit_type);
                 for unit in units {
                     let indent = "  ".repeat(unit.level + 2);
-                    println!("{}📦 {} - {}", indent, unit.config.name, unit.config.description);
+                    println!(
+                        "{}📦 {} - {}",
+                        indent, unit.config.name, unit.config.description
+                    );
                     println!("{}   Path: {}", indent, unit.path.display());
                     println!("{}   State: {:?}", indent, unit.config.state_management);
-                    
+
                     if !unit.config.dependencies.is_empty() {
                         println!("{}   Dependencies:", indent);
                         for dep in &unit.config.dependencies {
-                            let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                            let dep_display = dep
+                                .name()
+                                .cloned()
+                                .or_else(|| dep.path().cloned())
+                                .unwrap_or_else(|| "unknown".to_string());
                             println!("{}     - {}", indent, dep_display);
                         }
                     }
@@ -85,14 +98,19 @@ impl ShowCommand {
         Ok(())
     }
 
-    fn show_unit(&self, unit_name: &str, discovery: &UnitDiscovery, _options: &ShowOptions) -> Result<()> {
+    fn show_unit(
+        &self,
+        unit_name: &str,
+        discovery: &UnitDiscovery,
+        _options: &ShowOptions,
+    ) -> Result<()> {
         // Find the unit
-        let unit = discovery.registry.get_unit(unit_name)
-            .ok_or_else(|| EnvieError::ValidationError(
-                format!("Unit '{}' not found", unit_name)
-            ))?;
+        let unit = discovery.registry.get_unit(unit_name).ok_or_else(|| {
+            EnvieError::ValidationError(format!("Unit '{}' not found", unit_name))
+        })?;
 
-        self.output_manager.print_green(&format!("📦 Unit: {}", unit_name));
+        self.output_manager
+            .print_green(&format!("📦 Unit: {}", unit_name));
         println!();
 
         println!("  Type: {:?}", unit.config.unit_type);
@@ -105,7 +123,11 @@ impl ShowCommand {
         if !unit.config.dependencies.is_empty() {
             self.output_manager.print_blue("  Dependencies:");
             for dep in &unit.config.dependencies {
-                let dep_display = dep.name().map(|n| n.clone()).or_else(|| dep.path().map(|p| p.clone())).unwrap_or_else(|| "unknown".to_string());
+                let dep_display = dep
+                    .name()
+                    .cloned()
+                    .or_else(|| dep.path().cloned())
+                    .unwrap_or_else(|| "unknown".to_string());
                 println!("    📎 {}", dep_display);
             }
             println!();
@@ -136,7 +158,7 @@ impl ShowCommand {
         let workspace_file = self.working_directory.join("workspace.envie.yaml");
         if !workspace_file.exists() {
             return Err(EnvieError::ValidationError(
-                "No workspace.envie.yaml found. Run 'envie init' first.".to_string()
+                "No workspace.envie.yaml found. Run 'envie init' first.".to_string(),
             ));
         }
 

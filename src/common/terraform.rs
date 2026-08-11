@@ -7,8 +7,11 @@ use std::process::Command;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerraformOutput {
     pub value: serde_json::Value,
+    /// Terraform's own type description, which is a bare string only for
+    /// primitives — a list output reports `["list", "string"]`, and an object
+    /// reports a nested structure.
     #[serde(rename = "type")]
-    pub output_type: String,
+    pub output_type: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,8 +46,15 @@ impl TerraformManager {
         self.run_command("init", &["-upgrade"], false)
     }
 
+    /// Initialise with an explicit backend configuration.
+    ///
+    /// `-reconfigure` is always passed: Envie points the same directory at a
+    /// different state path for every environment, and without it Terraform
+    /// refuses to continue once the recorded backend differs. Reconfiguring
+    /// discards that record rather than migrating state, which is what Envie
+    /// wants, since each environment has its own state.
     pub fn init_with_backend_config(&self, backend_config: &[(&str, &str)]) -> Result<()> {
-        let mut args = vec![];
+        let mut args = vec!["-reconfigure".to_string(), "-input=false".to_string()];
         for (key, value) in backend_config {
             args.push(format!("-backend-config={}={}", key, value));
         }
@@ -83,17 +93,39 @@ impl TerraformManager {
     }
 
     pub fn apply(&self, vars: &[(&str, &str)]) -> Result<()> {
-        let mut args = vec!["-auto-approve", "-input=false"];
-        let mut var_args = Vec::new();
+        self.apply_with_var_files(vars, &[])
+    }
+
+    /// Apply with variables and `-var-file` arguments.
+    ///
+    /// Var files are relative to the unit directory, and missing ones are
+    /// skipped: an environment may declare a file that only some units have.
+    pub fn apply_with_var_files(&self, vars: &[(&str, &str)], var_files: &[String]) -> Result<()> {
+        let mut args = vec!["-auto-approve".to_string(), "-input=false".to_string()];
+        args.extend(self.variable_arguments(vars, var_files));
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run_command("apply", &arg_refs, false)
+    }
+
+    pub fn plan(&self, vars: &[(&str, &str)], var_files: &[String]) -> Result<()> {
+        let mut args = vec!["-input=false".to_string()];
+        args.extend(self.variable_arguments(vars, var_files));
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run_command("plan", &arg_refs, false)
+    }
+
+    fn variable_arguments(&self, vars: &[(&str, &str)], var_files: &[String]) -> Vec<String> {
+        let mut args = Vec::new();
+        for file in var_files {
+            if self.working_directory.join(file).exists() {
+                args.push(format!("-var-file={}", file));
+            }
+        }
         for (key, value) in vars {
-            let var_arg = format!("{}={}", key, value);
-            var_args.push(var_arg);
+            args.push("-var".to_string());
+            args.push(format!("{}={}", key, value));
         }
-        
-        for var_arg in &var_args {
-            args.extend(&["-var", var_arg]);
-        }
-        self.run_command("apply", &args, false)
+        args
     }
 
     pub fn apply_with_output(&self, vars: &[(&str, &str)], output_file: &str) -> Result<()> {
@@ -103,7 +135,7 @@ impl TerraformManager {
             let var_arg = format!("{}={}", key, value);
             var_args.push(var_arg);
         }
-        
+
         for var_arg in &var_args {
             args.extend(&["-var", var_arg]);
         }
@@ -112,17 +144,18 @@ impl TerraformManager {
     }
 
     pub fn destroy(&self, vars: &[(&str, &str)]) -> Result<()> {
-        let mut args = vec!["-auto-approve", "-input=false"];
-        let mut var_args = Vec::new();
-        for (key, value) in vars {
-            let var_arg = format!("{}={}", key, value);
-            var_args.push(var_arg);
-        }
-        
-        for var_arg in &var_args {
-            args.extend(&["-var", var_arg]);
-        }
-        self.run_command("destroy", &args, false)
+        self.destroy_with_var_files(vars, &[])
+    }
+
+    pub fn destroy_with_var_files(
+        &self,
+        vars: &[(&str, &str)],
+        var_files: &[String],
+    ) -> Result<()> {
+        let mut args = vec!["-auto-approve".to_string(), "-input=false".to_string()];
+        args.extend(self.variable_arguments(vars, var_files));
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.run_command("destroy", &arg_refs, false)
     }
 
     pub fn output_json(&self) -> Result<HashMap<String, TerraformOutput>> {
@@ -155,14 +188,16 @@ impl TerraformManager {
                     if status.success() {
                         Ok(())
                     } else {
-                        Err(crate::common::EnvieError::TerraformError(
-                            format!("terraform {} failed with exit code: {}", command, status)
-                        ))
+                        Err(crate::common::EnvieError::TerraformError(format!(
+                            "terraform {} failed with exit code: {}",
+                            command, status
+                        )))
                     }
                 }
-                Err(e) => Err(crate::common::EnvieError::ProcessError(
-                    format!("Failed to execute terraform {}: {}", command, e)
-                )),
+                Err(e) => Err(crate::common::EnvieError::ProcessError(format!(
+                    "Failed to execute terraform {}: {}",
+                    command, e
+                ))),
             }
         } else {
             // In non-verbose mode, capture output
@@ -173,14 +208,16 @@ impl TerraformManager {
                         Ok(())
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
-                        Err(crate::common::EnvieError::TerraformError(
-                            format!("terraform {} failed: {}", command, stderr)
-                        ))
+                        Err(crate::common::EnvieError::TerraformError(format!(
+                            "terraform {} failed: {}",
+                            command, stderr
+                        )))
                     }
                 }
-                Err(e) => Err(crate::common::EnvieError::ProcessError(
-                    format!("Failed to execute terraform {}: {}", command, e)
-                )),
+                Err(e) => Err(crate::common::EnvieError::ProcessError(format!(
+                    "Failed to execute terraform {}: {}",
+                    command, e
+                ))),
             }
         }
     }
@@ -190,7 +227,7 @@ impl TerraformManager {
         cmd.arg(command);
         cmd.args(args);
         cmd.current_dir(&self.working_directory);
-        
+
         // Set GODEBUG environment variable as in the original scripts
         cmd.env("GODEBUG", "asyncpreemptoff=1");
 
@@ -204,9 +241,10 @@ impl TerraformManager {
             Ok(String::from_utf8_lossy(&output.stdout).to_string())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(crate::common::EnvieError::TerraformError(
-                format!("terraform {} failed: {}", command, stderr)
-            ))
+            Err(crate::common::EnvieError::TerraformError(format!(
+                "terraform {} failed: {}",
+                command, stderr
+            )))
         }
     }
 }

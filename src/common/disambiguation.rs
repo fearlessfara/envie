@@ -83,7 +83,8 @@ pub fn resolve_unit_with_prompt<'a>(
         for unit in &matches {
             error_msg.push_str(&format!("  - {}\n", unit.qualified_name));
         }
-        error_msg.push_str("\nPlease specify the full qualified name using --unit <qualified-name>");
+        error_msg
+            .push_str("\nPlease specify the full qualified name using --unit <qualified-name>");
 
         return Err(EnvieError::ValidationError(error_msg));
     }
@@ -144,7 +145,9 @@ pub fn resolve_units_with_prompt<'a>(
         for unit in &matches {
             error_msg.push_str(&format!("  - {}\n", unit.qualified_name));
         }
-        error_msg.push_str("\nPlease specify the full qualified name or path prefix using --unit <name>");
+        error_msg.push_str(
+            "\nPlease specify the full qualified name or path prefix using --unit <name>",
+        );
 
         return Err(EnvieError::ValidationError(error_msg));
     }
@@ -167,7 +170,7 @@ mod tests {
             description: "API Service".to_string(),
             unit_type: UnitType::Service,
             path: "services/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
@@ -193,7 +196,7 @@ mod tests {
             description: "Backend API".to_string(),
             unit_type: UnitType::Service,
             path: "services/backend/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };
@@ -203,7 +206,7 @@ mod tests {
             description: "Frontend API".to_string(),
             unit_type: UnitType::Service,
             path: "services/frontend/api".to_string(),
-            depends: vec![],
+            dependencies: vec![],
             state_management: crate::common::unit_config::StateManagement::Dedicated,
             metadata: std::collections::HashMap::new(),
         };

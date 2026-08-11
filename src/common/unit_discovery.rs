@@ -1,5 +1,5 @@
+use crate::common::unit_config::{DiscoveredUnit, UnitConfig, UnitRegistry, UnitType};
 use crate::common::Result;
-use crate::common::unit_config::{UnitConfig, DiscoveredUnit, UnitRegistry, UnitType};
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -17,7 +17,7 @@ impl UnitDiscovery {
             registry: UnitRegistry::new(),
         }
     }
-    
+
     /// Discover all units in the project
     pub fn discover_all(&mut self) -> Result<()> {
         self.registry = UnitRegistry::new();
@@ -38,7 +38,7 @@ impl UnitDiscovery {
 
         Ok(())
     }
-    
+
     /// Parse a single envie.yaml file
     fn parse_unit_file(&self, file_path: &Path) -> Result<DiscoveredUnit> {
         let content = fs::read_to_string(file_path)?;
@@ -48,7 +48,8 @@ impl UnitDiscovery {
         let level = self.calculate_level(file_path);
 
         // Set the path relative to project root
-        let relative_path = file_path.parent()
+        let relative_path = file_path
+            .parent()
             .unwrap_or(file_path)
             .strip_prefix(&self.root_path)
             .unwrap_or(file_path.parent().unwrap_or(file_path))
@@ -71,12 +72,21 @@ impl UnitDiscovery {
             .count()
             .saturating_sub(2) // Subtract 2: 1 for the envie.yaml file, 1 for the directory containing it
     }
-    
+
     /// Build parent-child relationships between units
     fn build_hierarchy(&mut self) -> Result<()> {
-        let unit_data: Vec<(String, String, PathBuf, usize)> = self.registry.units_by_qualified_name
+        let unit_data: Vec<(String, String, PathBuf, usize)> = self
+            .registry
+            .units_by_qualified_name
             .iter()
-            .map(|(qname, unit)| (qname.clone(), unit.config.name.clone(), unit.path.clone(), unit.level))
+            .map(|(qname, unit)| {
+                (
+                    qname.clone(),
+                    unit.config.name.clone(),
+                    unit.path.clone(),
+                    unit.level,
+                )
+            })
             .collect();
 
         for (qualified_name, _unit_name, unit_path, unit_level) in unit_data {
@@ -87,13 +97,21 @@ impl UnitDiscovery {
                     let parent_qualified_name = parent_unit.qualified_name.clone();
 
                     // Add this unit as a child of the parent
-                    if let Some(parent_unit_mut) = self.registry.units_by_qualified_name.get_mut(&parent_qualified_name) {
+                    if let Some(parent_unit_mut) = self
+                        .registry
+                        .units_by_qualified_name
+                        .get_mut(&parent_qualified_name)
+                    {
                         parent_unit_mut.children.push(unit_path.clone());
                     }
                 }
 
                 // Set parent reference
-                if let Some(unit_mut) = self.registry.units_by_qualified_name.get_mut(&qualified_name) {
+                if let Some(unit_mut) = self
+                    .registry
+                    .units_by_qualified_name
+                    .get_mut(&qualified_name)
+                {
                     unit_mut.parent = Some(parent);
                 }
             }
@@ -101,7 +119,7 @@ impl UnitDiscovery {
 
         Ok(())
     }
-    
+
     /// Find the parent unit for a given unit
     fn find_parent(&self, unit_path: &PathBuf, unit_level: usize) -> Option<PathBuf> {
         if unit_level == 0 {
@@ -127,12 +145,12 @@ impl UnitDiscovery {
 
         None
     }
-    
+
     /// Get all units of a specific type
     pub fn get_units_by_type(&self, unit_type: &UnitType) -> Vec<&DiscoveredUnit> {
         self.registry.get_units_by_type(unit_type)
     }
-    
+
     /// Get all root-level units (units at depth 0)
     pub fn get_root_units(&self) -> Vec<&DiscoveredUnit> {
         self.registry
@@ -141,7 +159,7 @@ impl UnitDiscovery {
             .filter(|unit| unit.is_root_level())
             .collect()
     }
-    
+
     /// Get all leaf units (units with no children)
     pub fn get_leaf_units(&self) -> Vec<&DiscoveredUnit> {
         self.registry
@@ -155,22 +173,22 @@ impl UnitDiscovery {
     pub fn get_all_units(&self) -> Vec<&DiscoveredUnit> {
         self.registry.get_all_units()
     }
-    
+
     /// Find units by name pattern
     pub fn find_units_by_name(&self, pattern: &str) -> Vec<&DiscoveredUnit> {
         self.registry.find_units_by_pattern(pattern)
     }
-    
+
     /// Get the dependency graph for a unit
     pub fn get_dependency_graph(&self, unit_name: &str) -> Result<Vec<&DiscoveredUnit>> {
         let mut visited = std::collections::HashSet::new();
         let mut result = Vec::new();
-        
+
         self.collect_dependencies(unit_name, &mut visited, &mut result)?;
-        
+
         Ok(result)
     }
-    
+
     /// Recursively collect dependencies
     fn collect_dependencies<'a>(
         &'a self,
@@ -182,10 +200,10 @@ impl UnitDiscovery {
         if visited.contains(unit_name) {
             return Ok(());
         }
-        
+
         // Mark as visited before processing to prevent duplicates
         visited.insert(unit_name.to_string());
-        
+
         if let Some(unit) = self.registry.get_unit(unit_name) {
             // First, recursively collect all dependencies
             for dep in &unit.config.dependencies {
@@ -203,23 +221,27 @@ impl UnitDiscovery {
                 } else {
                     continue;
                 };
-                
+
                 // Recursively collect dependencies of this dependency
                 // This will add the dependency and its dependencies to the result
                 self.collect_dependencies(&dep_unit_name, visited, result)?;
             }
-            
+
             // Add this unit to result after all its dependencies have been added
             // (only if it's not the root unit being resolved, which is added separately)
             // Actually, we should add it here to maintain topological order
             result.push(unit);
         }
-        
+
         Ok(())
     }
-    
+
     /// Resolve a dependency path to a unit name
-    fn resolve_dependency_path(&self, from_path: &PathBuf, dep_path: &str) -> Result<Option<String>> {
+    fn resolve_dependency_path(
+        &self,
+        from_path: &PathBuf,
+        dep_path: &str,
+    ) -> Result<Option<String>> {
         // Convert relative path to path relative to project root
         let from_dir = from_path;
         let dep_relative = from_dir.join(dep_path);
@@ -255,7 +277,7 @@ impl UnitDiscovery {
 
         components.iter().collect()
     }
-    
+
     /// Get all units in dependency order (topological sort)
     pub fn get_units_in_dependency_order(&self) -> Result<Vec<&DiscoveredUnit>> {
         let mut visiting = std::collections::HashSet::new();
@@ -265,7 +287,12 @@ impl UnitDiscovery {
         // Process ALL units in dependency order using topological sort
         for unit in self.registry.get_all_units() {
             if !visited.contains(&unit.config.name) {
-                self.topological_visit(&unit.config.name, &mut visiting, &mut visited, &mut result)?;
+                self.topological_visit(
+                    &unit.config.name,
+                    &mut visiting,
+                    &mut visited,
+                    &mut result,
+                )?;
             }
         }
 
@@ -282,9 +309,10 @@ impl UnitDiscovery {
     ) -> Result<()> {
         // Check for cycles
         if visiting.contains(unit_name) {
-            return Err(crate::common::EnvieError::ValidationError(
-                format!("Circular dependency detected involving unit: {}", unit_name)
-            ));
+            return Err(crate::common::EnvieError::ValidationError(format!(
+                "Circular dependency detected involving unit: {}",
+                unit_name
+            )));
         }
 
         // Already fully processed
@@ -311,7 +339,7 @@ impl UnitDiscovery {
                 } else {
                     continue;
                 };
-                
+
                 self.topological_visit(&dep_unit_name, visiting, visited, result)?;
             }
 
@@ -325,17 +353,17 @@ impl UnitDiscovery {
 
         Ok(())
     }
-    
+
     /// Resolve deployment order for a specific unit
     pub fn resolve_deployment_order(&self, unit_name: &str) -> Result<Vec<&DiscoveredUnit>> {
         let mut visited = std::collections::HashSet::new();
         let mut result = Vec::new();
-        
+
         // Collect all dependencies recursively (this will also add the root unit)
         self.collect_dependencies(unit_name, &mut visited, &mut result)?;
-        
+
         // Note: collect_dependencies now adds the unit itself, so we don't need to add it again
-        
+
         Ok(result)
     }
 }

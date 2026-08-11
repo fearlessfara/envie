@@ -28,7 +28,6 @@ impl OutputManager {
     pub fn print_yellow(&self, msg: &str) {
         self.print_msg(&msg.yellow().to_string());
     }
-
 }
 
 impl Default for OutputManager {
@@ -36,7 +35,6 @@ impl Default for OutputManager {
         Self::new()
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -47,5 +45,4 @@ mod tests {
         let output = OutputManager::new();
         assert!(!output.suppress_echo || std::env::var("SUPPRESS_ECHO").is_ok());
     }
-
 }

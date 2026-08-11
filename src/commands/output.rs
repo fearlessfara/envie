@@ -1,7 +1,15 @@
+//! Collects the Terraform outputs of every unit in one environment.
+//!
+//! The environment is resolved through the planner, the same way `deploy` and
+//! `destroy` resolve it. Deriving the workspace here instead would go wrong for
+//! exactly the repositories Envie is meant to adopt, whose long-lived
+//! environments live in Terraform's `default` workspace.
+
+use crate::common::deployment::{PlanRequest, Planner, WorkspaceMode};
+use crate::common::project::Project;
 use crate::common::*;
-use crate::common::service_config::WorkspaceConfig;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
-use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct OutputOptions {
@@ -31,192 +39,136 @@ impl OutputCommand {
     }
 
     pub async fn execute(&self, options: OutputOptions) -> Result<()> {
-        // Find the project root
-        let project_root = self.find_project_root()?;
+        let by_unit = collect(
+            &self.working_directory,
+            &options.env_id,
+            options.unit_name.as_deref(),
+        )?;
 
-        // Get project name and workspace
-        let project_name = self.get_project_name()?;
-        let workspace = format!("{}-{}", project_name, options.env_id);
-
-        // Discover all units
-        let mut discovery = UnitDiscovery::new(project_root.clone());
-        discovery.discover_all()?;
-
-        if discovery.registry.units.is_empty() {
-            return Err(EnvieError::ValidationError(
-                "No deployable units found. Make sure you have envie.yaml files in your project.".to_string()
-            ));
-        }
-
-        // Determine which units to get outputs from
-        let units_to_query = if let Some(ref unit_name) = options.unit_name {
-            // Query specific unit
-            let matches = discovery.registry.resolve_unit(unit_name);
-            if matches.is_empty() {
-                return Err(EnvieError::ValidationError(
-                    format!("Unit '{}' not found", unit_name)
-                ));
-            }
-            matches
-        } else {
-            // Query all units
-            discovery.registry.get_all_units()
-        };
-
-        // Collect outputs from all units
-        let mut all_outputs: HashMap<String, serde_json::Value> = HashMap::new();
-
-        for unit in &units_to_query {
-            let unit_path = project_root.join(&unit.path);
-
-            match self.get_unit_outputs(&unit_path, &workspace, &unit.config.name).await {
-                Ok(outputs) => {
-                    // Prefix outputs with unit name to avoid conflicts
-                    for (key, value) in outputs {
-                        let prefixed_key = format!("{}_{}", unit.config.name, key);
-                        all_outputs.insert(prefixed_key, value);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("⚠️  Warning: Failed to get outputs from unit '{}': {}", unit.config.name, e);
-                }
-            }
-        }
-
-        // Format and display outputs
-        match options.format {
-            OutputFormat::Json => {
-                let json_output = serde_json::to_string_pretty(&all_outputs)?;
-
-                if let Some(output_file) = options.output_file {
-                    std::fs::write(&output_file, &json_output)?;
-                    self.output_manager.print_green(&format!("✅ Outputs saved to {}", output_file));
-                } else {
-                    println!("{}", json_output);
-                }
-            }
-            OutputFormat::Table => {
-                self.print_outputs_table(&all_outputs, &workspace)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn get_unit_outputs(&self, unit_path: &PathBuf, workspace: &str, unit_name: &str) -> Result<HashMap<String, serde_json::Value>> {
-        let terraform_manager = TerraformManager::new(unit_path);
-
-        // Check if terraform is initialized
-        let terraform_dir = unit_path.join(".terraform");
-        if !terraform_dir.exists() {
-            return Err(EnvieError::TerraformError(
-                format!("Terraform not initialized in unit '{}'", unit_name)
-            ));
-        }
-
-        // Select the workspace
-        let workspaces = terraform_manager.workspace_list()?;
-        if !workspaces.iter().any(|w| w == workspace) {
-            return Err(EnvieError::TerraformError(
-                format!("Workspace '{}' does not exist for unit '{}'", workspace, unit_name)
-            ));
-        }
-        terraform_manager.workspace_select(workspace)?;
-
-        // Get terraform outputs
-        let outputs = terraform_manager.output_json()?;
-
-        // Convert to HashMap<String, serde_json::Value>
-        let mut result = HashMap::new();
-        for (key, output) in outputs {
-            result.insert(key, output.value);
-        }
-
-        Ok(result)
-    }
-
-    fn print_outputs_table(&self, outputs: &HashMap<String, serde_json::Value>, workspace: &str) -> Result<()> {
-        self.output_manager.print_green(&format!("\n📊 Terraform Outputs for workspace: {}\n", workspace));
-
-        if outputs.is_empty() {
-            println!("  (No outputs found)");
+        if by_unit.is_empty() {
+            self.output_manager
+                .print_yellow(&format!("Nothing is deployed in {}.", options.env_id));
             return Ok(());
         }
 
-        // Group outputs by unit
-        let mut outputs_by_unit: HashMap<String, Vec<(String, serde_json::Value)>> = HashMap::new();
-
-        for (key, value) in outputs {
-            if let Some(separator_pos) = key.find('_') {
-                let unit_name = &key[..separator_pos];
-                let output_key = &key[separator_pos + 1..];
-
-                outputs_by_unit
-                    .entry(unit_name.to_string())
-                    .or_insert_with(Vec::new)
-                    .push((output_key.to_string(), value.clone()));
-            } else {
-                outputs_by_unit
-                    .entry("unknown".to_string())
-                    .or_insert_with(Vec::new)
-                    .push((key.clone(), value.clone()));
+        match options.format {
+            OutputFormat::Json => {
+                let json = serde_json::to_string_pretty(&by_unit)?;
+                if let Some(path) = &options.output_file {
+                    std::fs::write(path, format!("{json}\n"))?;
+                    self.output_manager
+                        .print_green(&format!("✅ Outputs written to {path}"));
+                } else {
+                    println!("{json}");
+                }
             }
-        }
-
-        // Print outputs grouped by unit
-        for (unit_name, unit_outputs) in outputs_by_unit.iter() {
-            println!("┌─ {} ─────────────────────────────────", unit_name);
-
-            for (key, value) in unit_outputs {
-                let value_str = match value {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Bool(b) => b.to_string(),
-                    serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
-                        serde_json::to_string_pretty(value).unwrap_or_else(|_| "...".to_string())
-                    }
-                    serde_json::Value::Null => "null".to_string(),
-                };
-
-                println!("│  {}: {}", key, value_str);
+            OutputFormat::Table => {
+                self.print_table(&by_unit, &options.env_id);
+                if let Some(path) = &options.output_file {
+                    std::fs::write(
+                        path,
+                        format!("{}\n", serde_json::to_string_pretty(&by_unit)?),
+                    )?;
+                    self.output_manager
+                        .print_green(&format!("✅ Outputs written to {path}"));
+                }
             }
-            println!("└────────────────────────────────────────\n");
         }
 
         Ok(())
     }
 
-    fn get_project_name(&self) -> Result<String> {
-        let workspace_file = self.working_directory.join("workspace.envie.yaml");
-        if !workspace_file.exists() {
-            return Ok("envie-project".to_string());
+    fn print_table(
+        &self,
+        by_unit: &BTreeMap<String, BTreeMap<String, serde_json::Value>>,
+        environment: &str,
+    ) {
+        self.output_manager
+            .print_green(&format!("\n📊 Outputs for {environment}\n"));
+
+        if by_unit.is_empty() {
+            println!("  (no outputs)");
+            return;
         }
 
-        let content = std::fs::read_to_string(&workspace_file)?;
-        let config: WorkspaceConfig = serde_yaml::from_str(&content)?;
+        for (unit, outputs) in by_unit {
+            println!("┌─ {unit} ─────────────────────────────────");
+            for (key, value) in outputs {
+                println!("│  {}: {}", key, render_value(value));
+            }
+            println!("└────────────────────────────────────────\n");
+        }
+    }
+}
 
-        Ok(config.project.as_ref()
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "envie-project".to_string()))
+/// Every unit's Terraform outputs in one environment, keyed by unit name.
+///
+/// Shared with `envie generate`, so that the values written into a `.env` are
+/// the ones `envie output` reports and both agree on where state lives.
+pub type CombinedOutputs = BTreeMap<String, BTreeMap<String, serde_json::Value>>;
+
+/// Reads the Terraform outputs of everything deployed in one environment.
+///
+/// Units the environment never deployed are skipped rather than reported as
+/// failures: a repository usually has more units than any one environment used.
+pub fn collect(
+    working_directory: &std::path::Path,
+    environment: &str,
+    unit: Option<&str>,
+) -> Result<CombinedOutputs> {
+    let planner = Planner::new(Project::discover(working_directory)?)?;
+
+    // Teardown planning replays what was actually deployed.
+    let plan = planner.plan_teardown(&PlanRequest {
+        environment: environment.to_string(),
+        unit: unit.map(str::to_string),
+        environment_overrides: HashMap::new(),
+        include_dependencies: false,
+        no_prompt: true,
+        verbose: false,
+    })?;
+
+    let mut by_unit = CombinedOutputs::new();
+
+    for planned in &plan.units {
+        let prepared = planned.prepare(
+            &plan.project_name,
+            &plan.environment,
+            WorkspaceMode::RequireExisting,
+            false,
+        )?;
+
+        let Some(terraform) = prepared else {
+            continue;
+        };
+
+        let outputs = terraform.output_json()?;
+        if outputs.is_empty() {
+            continue;
+        }
+
+        by_unit.insert(
+            planned.name.clone(),
+            outputs
+                .into_iter()
+                .map(|(key, output)| (key, output.value))
+                .collect(),
+        );
     }
 
-    fn find_project_root(&self) -> Result<PathBuf> {
-        let mut current = self.working_directory.clone();
+    Ok(by_unit)
+}
 
-        loop {
-            let workspace_file = current.join("workspace.envie.yaml");
-            if workspace_file.exists() {
-                return Ok(current);
-            }
-
-            // Move up one directory
-            if let Some(parent) = current.parent() {
-                current = parent.to_path_buf();
-            } else {
-                // No workspace.envie.yaml found, use working directory as fallback
-                return Ok(self.working_directory.clone());
-            }
+/// Renders an output for a terminal, leaving strings unquoted and anything
+/// structured as the JSON it is.
+fn render_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            serde_json::to_string(value).unwrap_or_else(|_| "...".to_string())
         }
+        other => other.to_string(),
     }
 }
 
@@ -226,27 +178,34 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_output_command_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let output = OutputCommand::new(temp_dir.path().to_path_buf());
-        assert_eq!(output.working_directory, temp_dir.path());
+    fn a_directory_that_is_not_a_project_is_reported_as_such() {
+        let tmp = TempDir::new().unwrap();
+
+        let error = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(
+                OutputCommand::new(tmp.path().to_path_buf()).execute(OutputOptions {
+                    output_file: None,
+                    env_id: "pr-1".to_string(),
+                    unit_name: None,
+                    format: OutputFormat::Table,
+                }),
+            )
+            .unwrap_err();
+
+        assert!(!error.to_string().is_empty());
     }
 
     #[test]
-    fn test_merge_outputs() {
-        let temp_dir = TempDir::new().unwrap();
-        let output = OutputCommand::new(temp_dir.path().to_path_buf());
-        
-        let mut combined = serde_json::Map::new();
-        let new = serde_json::json!({
-            "key1": "value1",
-            "key2": "value2"
-        });
-        
-        output.merge_outputs(&mut combined, new);
-        
-        assert_eq!(combined.len(), 2);
-        assert_eq!(combined.get("key1").unwrap(), "value1");
-        assert_eq!(combined.get("key2").unwrap(), "value2");
+    fn strings_print_without_quotes_and_structures_print_as_json() {
+        assert_eq!(
+            render_value(&serde_json::json!("arn:aws:iam::x")),
+            "arn:aws:iam::x"
+        );
+        assert_eq!(render_value(&serde_json::json!(3)), "3");
+        assert_eq!(
+            render_value(&serde_json::json!(["a", "b"])),
+            "[\"a\",\"b\"]"
+        );
     }
 }
