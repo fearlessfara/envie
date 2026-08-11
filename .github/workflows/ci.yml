@@ -62,3 +62,26 @@ jobs:
           done < <(find examples -name '*.tf' -not -path '*/.terraform/*' \
                      -exec dirname {} \; | sort -u)
           exit "$failed"
+
+  # Exercises action.yml against a published GitHub Release (not the in-tree
+  # binary). No Terraform, no AWS: install onto PATH and run --version.
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install (default → latest)
+        uses: ./
+
+      - name: envie is on PATH
+        run: |
+          set -euo pipefail
+          envie --version
+          envie --help >/dev/null
+
+      # An older published tag, so this is not the same fetch as `latest`.
+      - name: Install a pinned version via args
+        uses: ./
+        with:
+          version: v0.2.0
+          args: --version

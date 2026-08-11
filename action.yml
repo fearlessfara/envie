@@ -1,0 +1,133 @@
+name: Setup Envie
+description: Install the envie CLI from GitHub Releases and optionally run a command
+author: fearlessfara
+branding:
+  icon: layers
+  color: blue
+
+inputs:
+  version:
+    description: >
+      Envie version to install (`0.2.1`, `v0.2.1`, or `latest`). When omitted,
+      the version is taken from the action ref (`fearlessfara/envie@v0.2.1`);
+      otherwise `latest`.
+    required: false
+    default: ""
+  args:
+    description: >
+      If set, run `envie` with these arguments after install
+      (for example `deploy --env pr-42 --no-prompt`).
+    required: false
+    default: ""
+  token:
+    description: GitHub token used to resolve `latest` and download release assets
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install envie
+      id: install
+      shell: bash
+      env:
+        VERSION_INPUT: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        RUNNER_OS: ${{ runner.os }}
+        RUNNER_ARCH: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+
+        raw="${VERSION_INPUT}"
+        if [ -z "${raw}" ]; then
+          case "${ACTION_REF}" in
+            v[0-9]*|[0-9]*.[0-9]*) raw="${ACTION_REF}" ;;
+            *) raw="latest" ;;
+          esac
+        fi
+
+        curl_auth() {
+          if [ -n "${GITHUB_TOKEN:-}" ]; then
+            curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "User-Agent: fearlessfara-envie-action" \
+              "$@"
+          else
+            curl -fsSL -H "User-Agent: fearlessfara-envie-action" "$@"
+          fi
+        }
+
+        if [ "${raw}" = "latest" ]; then
+          json="$(curl_auth \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/fearlessfara/envie/releases/latest)"
+          if command -v jq >/dev/null 2>&1; then
+            tag="$(printf '%s' "${json}" | jq -r .tag_name)"
+          else
+            tag="$(printf '%s' "${json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag_name"])')"
+          fi
+        else
+          tag="${raw}"
+          case "${tag}" in
+            v*) ;;
+            *) tag="v${tag}" ;;
+          esac
+        fi
+
+        version="${tag#v}"
+        if [ -z "${version}" ] || [ "${version}" = "null" ]; then
+          echo "::error::Could not resolve an Envie version from '${raw}'"
+          exit 1
+        fi
+
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64) asset="linux-x86_64" ;;
+          Linux-ARM64) asset="linux-aarch64" ;;
+          macOS-X64|macOS-ARM64) asset="darwin-universal" ;;
+          *)
+            echo "::error::Unsupported runner: ${RUNNER_OS} ${RUNNER_ARCH}"
+            exit 1
+            ;;
+        esac
+
+        tarball="envie-${version}-${asset}.tar.gz"
+        base="https://github.com/fearlessfara/envie/releases/download/${tag}"
+        work="${RUNNER_TEMP}/envie-install"
+        bin_dir="${RUNNER_TEMP}/envie-bin"
+        mkdir -p "${work}" "${bin_dir}"
+
+        echo "Installing envie ${tag} (${tarball})"
+        curl_auth -o "${work}/${tarball}" "${base}/${tarball}"
+        curl_auth -o "${work}/SHA256SUMS" "${base}/SHA256SUMS"
+
+        expected="$(awk -v f="${tarball}" '$2 == f { print $1; exit }' "${work}/SHA256SUMS")"
+        if [ -z "${expected}" ]; then
+          echo "::error::No checksum for ${tarball} in SHA256SUMS"
+          exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          (cd "${work}" && printf '%s  %s\n' "${expected}" "${tarball}" | sha256sum -c -)
+        else
+          actual="$(shasum -a 256 "${work}/${tarball}" | awk '{ print $1 }')"
+          if [ "${actual}" != "${expected}" ]; then
+            echo "::error::Checksum mismatch for ${tarball}"
+            exit 1
+          fi
+        fi
+
+        tar -xzf "${work}/${tarball}" -C "${bin_dir}"
+        chmod +x "${bin_dir}/envie"
+        echo "${bin_dir}" >> "${GITHUB_PATH}"
+
+        "${bin_dir}/envie" --version
+
+    - name: Run envie
+      if: inputs.args != ''
+      shell: bash
+      env:
+        ENVIE_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        eval "envie ${ENVIE_ARGS}"

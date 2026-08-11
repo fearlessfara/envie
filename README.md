@@ -35,6 +35,77 @@ Requires Terraform 1.0+ and, for S3 state, the AWS CLI. Envie does not handle
 credentials itself: it shells out to `terraform` and `aws`, which use the standard
 credential chain.
 
+## GitHub Actions
+
+A composite Action at the root of this repository installs the matching release
+binary and puts `envie` on `PATH`. Pin it to the same tag as the CLI:
+
+```yaml
+- uses: fearlessfara/envie@v0.2.1
+- run: envie deploy --env pr-${{ github.event.pull_request.number }} --no-prompt
+```
+
+Omit `version` to use the tag you pinned (`@v0.2.1`); set `version: latest` to
+always take the newest release. Pass `args` to run a command in the same step:
+
+```yaml
+- uses: fearlessfara/envie@v0.2.1
+  with:
+    args: delete --env pr-${{ github.event.pull_request.number }} --no-prompt
+```
+
+The Action does not install Terraform or configure cloud credentials. Use
+[`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform) and
+your usual AWS setup (for example
+[`aws-actions/configure-aws-credentials`](https://github.com/aws-actions/configure-aws-credentials)
+with OIDC) before calling Envie.
+
+Ephemeral environments per pull request:
+
+```yaml
+name: Envie
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/envie-ci
+          aws-region: eu-west-1
+      - uses: fearlessfara/envie@v0.2.1
+      - run: envie deploy --env pr-${{ github.event.pull_request.number }} --no-prompt
+
+  destroy:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/envie-ci
+          aws-region: eu-west-1
+      - uses: fearlessfara/envie@v0.2.1
+        with:
+          args: delete --env pr-${{ github.event.pull_request.number }} --no-prompt
+```
+
 ## Releasing
 
 1. Bump `version` in `Cargo.toml` so it matches the tag you will push.
@@ -49,6 +120,7 @@ credential chain.
    binary and static Linux binaries for x86_64 and aarch64, attaches them to the
    GitHub Release with their checksums, and updates
    [`fearlessfara/homebrew-tap`](https://github.com/fearlessfara/homebrew-tap).
+   The same tag is what workflows pin as `uses: fearlessfara/envie@v0.2.1`.
 
 The tap bump needs a `HOMEBREW_TAP_TOKEN` secret on this repository (a token with
 write access to `fearlessfara/homebrew-tap`). See [CONTRIBUTING.md](CONTRIBUTING.md).
