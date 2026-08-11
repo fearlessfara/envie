@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --check
+
+      - name: Build
+        run: cargo build --all-targets
+
+      # No credentials and no network: the suite adopts fixtures and plans them,
+      # and never invokes Terraform.
+      - name: Test
+        run: cargo test --all-targets
+
+      - name: Clippy
+        run: cargo clippy --all-targets
+
+  # Every example under examples/ is real Terraform, and the tests only check the
+  # Envie configuration next to it. This catches an example that stopped parsing.
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Validate every example root module
+        run: |
+          set -euo pipefail
+          failed=0
+          # full_backend is Envie-native: its units reference the locals and
+          # remote state blocks Envie generates at deploy time, so Terraform
+          # cannot validate them on their own.
+          while IFS= read -r dir; do
+            case "$dir" in
+              */full_backend/*) continue ;;
+            esac
+            echo "==> $dir"
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate || failed=1
+          done < <(find examples -name '*.tf' -not -path '*/.terraform/*' \
+                     -exec dirname {} \; | sort -u)
+          exit "$failed"

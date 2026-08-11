@@ -1,0 +1,43 @@
+---
+description: How to get AWS credentials and run Terraform/AWS tests for envie
+alwaysApply: true
+---
+
+# AWS credentials
+
+Nothing in this repo reads AWS credentials directly — `envie` shells out to
+`terraform` and `aws`, which use the standard credential chain. Get credentials
+by wrapping the command in `aws-vault`:
+
+```bash
+aws-vault exec personal --no-session -- cargo run -- deploy --env test-123
+aws-vault exec personal --no-session -- terraform plan
+aws-vault exec personal --no-session -- aws sts get-caller-identity
+```
+
+`--no-session` is required: the `personal` profile's cached STS session token is
+usually expired, and `--no-session` skips `sts:GetSessionToken` so long-lived
+credentials are used directly.
+
+For a whole shell session of AWS work, use `aws-vault exec personal --no-session
+-- zsh` once instead of prefixing every command.
+
+## Cost discipline when testing
+
+Only create resources that are free or effectively free, and always tear them
+down in the same session:
+
+- Safe: SSM parameters (Standard tier — the best choice for end-to-end tests, as
+  they are free, instant to create and have real outputs to pass between units),
+  S3 buckets (empty), DynamoDB tables on-demand, IAM roles/policies, Lambda (free
+  tier), API Gateway, CloudWatch log groups, SQS, SNS, Step Functions (standard).
+- Avoid unless the user explicitly asks: NAT gateways, RDS, EKS, ElastiCache,
+  Redshift, Fargate/EC2 instances, Global Accelerator, anything with an hourly
+  charge.
+- Prefer `terraform plan` / `envie deploy --dry-run` over `apply` when the goal
+  is only to validate generated configuration.
+- After an `apply`, always `destroy`, and delete any bootstrap S3 bucket and
+  DynamoDB lock table the test created.
+
+Use `eu-west-1` unless a test needs otherwise, and prefix test resource names
+with `envie-test-` so leftovers are identifiable.

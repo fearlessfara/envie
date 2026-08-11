@@ -4,12 +4,95 @@ This guide will walk you through creating your first Envie project from scratch.
 
 **Time to complete**: ~15 minutes
 
+> **Already have a Terraform repository?** Don't follow this guide — you don't need
+> to build anything. Run `envie adopt` in it instead, and see
+> [Adopting an existing repository](#adopting-an-existing-repository) below.
+
 ## Prerequisites
 
 - Envie installed (`cargo build --release`)
 - AWS credentials configured
 - Terraform installed (v1.0+)
 - Git (optional, for branch-based workflows)
+
+## Adopting an existing repository
+
+Adoption is the fastest route to multiple environments, because it starts from the
+Terraform you already have. It does not reorganise your repository, does not edit
+your `.tf` files, and does not move your state.
+
+### 1. See what Envie makes of it
+
+```bash
+cd my-terraform-repo
+envie adopt --dry-run
+```
+
+Read the report before going further. It lists the directories Envie will treat as
+deployable units, the ones it will ignore and why, the dependencies it inferred
+from your `terraform_remote_state` blocks, and the state paths it found. If a
+directory is missing or misclassified, that is the thing to fix first.
+
+### 2. Adopt it
+
+```bash
+envie adopt --environment production
+```
+
+`--environment` names the environment your existing infrastructure becomes. Pick
+the name you already call it — `prod`, `production`, `live`. Envie writes:
+
+- `workspace.envie.yaml`, with your existing state paths recorded under
+  `state_keys` so that environment keeps managing the resources you already have
+- an `envie.yaml` in each root module, with the dependencies it inferred
+- `.gitignore` entries for the files Envie generates
+
+Nothing else is touched. If Envie configuration already exists, adoption stops
+unless you pass `--force`.
+
+### 3. Prove the adoption is a no-op
+
+This is the step worth being careful about. Deploying the adopted environment
+should change nothing at all:
+
+```bash
+envie deploy --env production --dry-run   # check the state paths look right
+envie deploy --env production             # expect "no changes" from Terraform
+```
+
+If Terraform proposes to create resources that already exist, the state paths in
+`workspace.envie.yaml` are wrong. Fix `state_keys` rather than applying.
+
+### 4. Create environments
+
+```bash
+# A complete, isolated copy of everything.
+envie deploy --env pr-42
+
+# Or just one unit, reading production's state for the rest.
+envie deploy --env pr-42 --unit api -E network:stable.production
+```
+
+The ephemeral environment gets its own state paths and its own Terraform
+workspace, and the environment name is fed into your repository's own environment
+variable (`var.environment`, `var.env`, `var.stage`, ...) so resource names don't
+collide with production's.
+
+### 5. Throw it away
+
+```bash
+envie delete --env pr-42
+```
+
+No flags needed, even for the `-E` deployment above: Envie recorded how the
+environment was deployed and replays it. `delete` removes the environment's
+infrastructure and state, and refuses to touch a stable environment. The state
+bucket and lock table are never deleted.
+
+---
+
+The rest of this guide builds a project from scratch, which is worth reading if
+you want to understand the configuration Envie generated for you.
 
 ## Step 1: Create a New Project
 
@@ -25,28 +108,31 @@ envie init --name myapp --description "My application infrastructure"
 ```
 
 **What this does**:
-- Creates `workspace.envie.yaml` (global environment configuration)
-- Creates example service structure in `services/`
-- Creates `.gitignore` with Envie patterns
-- Creates example units with `envie.yaml` files
+- Creates `workspace.envie.yaml` with one ephemeral pattern and one stable environment
+- Creates two units under `units/`, the second reading the first's output
+- Creates `.gitignore` with Envie patterns, and a `README.md`
 
 **Output**:
 ```
-✅ Envie project initialized successfully!
+✅ Created an Envie project in /path/to/myapp
 
-📁 Project structure created:
-  ├── workspace.envie.yaml     # Global project configuration
-  ├── services/                # Service directory
-  │   ├── networking/          # Example networking service
-  │   ├── database/            # Example database service
-  │   └── api/                 # Example API service
-  └── README.md                # Project documentation
+  workspace.envie.yaml   project, environments and backend
+  units/db/              a unit that produces an output
+  units/api/             a unit that reads it
 
-🚀 Next steps:
-  1. Review and customize workspace.envie.yaml and unit envie.yaml files
-  2. Add your services to the services/ directory
-  3. Run 'envie deploy --unit <name> --env <id>' to deploy
+The two units use Terraform's built-in terraform_data, so they cost
+nothing to deploy. With AWS credentials in your shell:
+
+  envie deploy --env pr-1 --dry-run   # what would happen
+  envie deploy --env pr-1             # build a whole environment
+  envie output --env pr-1             # see what it produced
+  envie delete --env pr-1             # remove it again
 ```
+
+The scaffolded units deploy as they are, so you can watch a whole environment
+being built and torn down before writing any Terraform of your own. Envie offers
+to create the state bucket and lock table on the first deploy; check the bucket
+name first, since S3 bucket names are global.
 
 ## Step 2: Configure Environments
 

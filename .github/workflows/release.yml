@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Package universal binary
+        id: package
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          lipo -create \
+            target/aarch64-apple-darwin/release/envie \
+            target/x86_64-apple-darwin/release/envie \
+            -output envie
+          TARBALL="envie-${VERSION}-darwin-universal.tar.gz"
+          tar czf "${TARBALL}" envie
+          SHA256="$(shasum -a 256 "${TARBALL}" | awk '{print $1}')"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.package.outputs.tarball }}
+          generate_release_notes: true
+
+      - name: Checkout Homebrew tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: fearlessfara/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew formula
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        working-directory: homebrew-tap
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          version = os.environ["VERSION"]
+          sha256 = os.environ["SHA256"]
+          Path("Formula").mkdir(exist_ok=True)
+          Path("Formula/envie.rb").write_text(
+              f'''class Envie < Formula
+            desc "Manage ephemeral Terraform environments with layered dependencies"
+            homepage "https://github.com/fearlessfara/envie"
+            version "{version}"
+            url "https://github.com/fearlessfara/envie/releases/download/v{version}/envie-{version}-darwin-universal.tar.gz"
+            sha256 "{sha256}"
+            license "MIT"
+
+            def install
+              bin.install "envie"
+            end
+
+            test do
+              assert_match "envie", shell_output("#{{bin}}/envie --help")
+            end
+          end
+          '''
+          )
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/envie.rb
+          if git diff --cached --quiet; then
+            echo "Formula already up to date"
+            exit 0
+          fi
+          git commit -m "envie ${VERSION}"
+          git push
+
+      - name: Skip tap update
+        if: env.HOMEBREW_TAP_TOKEN == ''
+        run: echo "::warning::HOMEBREW_TAP_TOKEN is not set; skipped updating fearlessfara/homebrew-tap"
