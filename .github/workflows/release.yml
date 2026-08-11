@@ -9,42 +9,99 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+  build:
+    strategy:
+      matrix:
+        include:
+          # One universal binary rather than two, so the formula needs no
+          # architecture split on macOS.
+          - runner: macos-latest
+            name: darwin-universal
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          # Statically linked against musl, so the binary does not depend on the
+          # glibc version of whatever distribution it lands on.
+          - runner: ubuntu-latest
+            name: linux-x86_64
+            targets: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            name: linux-aarch64
+            targets: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.targets }}
+
+      - name: Install musl toolchain
+        if: startsWith(matrix.runner, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build
         run: |
-          cargo build --release --target aarch64-apple-darwin
-          cargo build --release --target x86_64-apple-darwin
+          set -euo pipefail
+          for target in ${TARGETS//,/ }; do
+            cargo build --release --locked --target "$target"
+          done
+        env:
+          TARGETS: ${{ matrix.targets }}
 
-      - name: Package universal binary
+      - name: Package
         id: package
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          lipo -create \
-            target/aarch64-apple-darwin/release/envie \
-            target/x86_64-apple-darwin/release/envie \
-            -output envie
-          TARBALL="envie-${VERSION}-darwin-universal.tar.gz"
+          TARBALL="envie-${VERSION}-${{ matrix.name }}.tar.gz"
+
+          if [ "${{ matrix.name }}" = "darwin-universal" ]; then
+            lipo -create \
+              target/aarch64-apple-darwin/release/envie \
+              target/x86_64-apple-darwin/release/envie \
+              -output envie
+          else
+            cp "target/${{ matrix.targets }}/release/envie" envie
+          fi
+
           tar czf "${TARBALL}" envie
-          SHA256="$(shasum -a 256 "${TARBALL}" | awk '{print $1}')"
-          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
           echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
-          echo "sha256=${SHA256}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ steps.package.outputs.tarball }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        id: sums
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd artifacts
+          sha256sum *.tar.gz | tee ../SHA256SUMS
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          for name in darwin-universal linux-x86_64 linux-aarch64; do
+            sum="$(sha256sum "envie-${VERSION}-${name}.tar.gz" | awk '{print $1}')"
+            echo "${name//-/_}=${sum}" >> "${GITHUB_OUTPUT}"
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.package.outputs.tarball }}
+          files: |
+            artifacts/*.tar.gz
+            SHA256SUMS
           generate_release_notes: true
 
       - name: Checkout Homebrew tap
@@ -59,8 +116,10 @@ jobs:
         if: env.HOMEBREW_TAP_TOKEN != ''
         working-directory: homebrew-tap
         env:
-          VERSION: ${{ steps.package.outputs.version }}
-          SHA256: ${{ steps.package.outputs.sha256 }}
+          VERSION: ${{ steps.sums.outputs.version }}
+          SHA_DARWIN: ${{ steps.sums.outputs.darwin_universal }}
+          SHA_LINUX_X86_64: ${{ steps.sums.outputs.linux_x86_64 }}
+          SHA_LINUX_AARCH64: ${{ steps.sums.outputs.linux_aarch64 }}
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -68,23 +127,37 @@ jobs:
           import os
 
           version = os.environ["VERSION"]
-          sha256 = os.environ["SHA256"]
+          base = f"https://github.com/fearlessfara/envie/releases/download/v{version}"
           Path("Formula").mkdir(exist_ok=True)
           Path("Formula/envie.rb").write_text(
               f'''class Envie < Formula
-            desc "Manage ephemeral Terraform environments with layered dependencies"
+            desc "Run many environments from one Terraform codebase"
             homepage "https://github.com/fearlessfara/envie"
             version "{version}"
-            url "https://github.com/fearlessfara/envie/releases/download/v{version}/envie-{version}-darwin-universal.tar.gz"
-            sha256 "{sha256}"
             license "MIT"
+
+            on_macos do
+              url "{base}/envie-{version}-darwin-universal.tar.gz"
+              sha256 "{os.environ["SHA_DARWIN"]}"
+            end
+
+            on_linux do
+              on_intel do
+                url "{base}/envie-{version}-linux-x86_64.tar.gz"
+                sha256 "{os.environ["SHA_LINUX_X86_64"]}"
+              end
+              on_arm do
+                url "{base}/envie-{version}-linux-aarch64.tar.gz"
+                sha256 "{os.environ["SHA_LINUX_AARCH64"]}"
+              end
+            end
 
             def install
               bin.install "envie"
             end
 
             test do
-              assert_match "envie", shell_output("#{{bin}}/envie --help")
+              assert_match "envie", shell_output("#{{bin}}/envie --version")
             end
           end
           '''
