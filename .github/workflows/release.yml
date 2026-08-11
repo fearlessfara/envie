@@ -28,7 +28,7 @@ jobs:
             targets: aarch64-unknown-linux-musl
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -66,7 +66,7 @@ jobs:
           tar czf "${TARBALL}" envie
           echo "tarball=${TARBALL}" >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: ${{ steps.package.outputs.tarball }}
@@ -78,7 +78,7 @@ jobs:
     env:
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
@@ -97,7 +97,7 @@ jobs:
           done
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/*.tar.gz
@@ -106,7 +106,7 @@ jobs:
 
       - name: Checkout Homebrew tap
         if: env.HOMEBREW_TAP_TOKEN != ''
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: fearlessfara/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -128,28 +128,24 @@ jobs:
 
           version = os.environ["VERSION"]
           base = f"https://github.com/fearlessfara/envie/releases/download/v{version}"
-          Path("Formula").mkdir(exist_ok=True)
-          Path("Formula/envie.rb").write_text(
-              f'''class Envie < Formula
+
+          # `brew audit --strict` rejects url and sha256 inside on_macos/on_linux
+          # blocks, and rejects an explicit version when one can be read from the
+          # URL, so the platform split is a plain conditional.
+          formula = f'''class Envie < Formula
             desc "Run many environments from one Terraform codebase"
             homepage "https://github.com/fearlessfara/envie"
-            version "{version}"
             license "MIT"
 
-            on_macos do
+            if OS.mac?
               url "{base}/envie-{version}-darwin-universal.tar.gz"
               sha256 "{os.environ["SHA_DARWIN"]}"
-            end
-
-            on_linux do
-              on_intel do
-                url "{base}/envie-{version}-linux-x86_64.tar.gz"
-                sha256 "{os.environ["SHA_LINUX_X86_64"]}"
-              end
-              on_arm do
-                url "{base}/envie-{version}-linux-aarch64.tar.gz"
-                sha256 "{os.environ["SHA_LINUX_AARCH64"]}"
-              end
+            elsif Hardware::CPU.intel?
+              url "{base}/envie-{version}-linux-x86_64.tar.gz"
+              sha256 "{os.environ["SHA_LINUX_X86_64"]}"
+            else
+              url "{base}/envie-{version}-linux-aarch64.tar.gz"
+              sha256 "{os.environ["SHA_LINUX_AARCH64"]}"
             end
 
             def install
@@ -157,11 +153,13 @@ jobs:
             end
 
             test do
-              assert_match "envie", shell_output("#{{bin}}/envie --version")
+              assert_match "envie {version}", shell_output("#{{bin}}/envie --version")
             end
           end
           '''
-          )
+
+          Path("Formula").mkdir(exist_ok=True)
+          Path("Formula/envie.rb").write_text(formula)
           PY
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
