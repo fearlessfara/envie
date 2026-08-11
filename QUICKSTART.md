@@ -1,19 +1,17 @@
 # Envie Quickstart Guide
 
-This guide will walk you through creating your first Envie project from scratch. By the end, you'll have deployed infrastructure to an ephemeral environment with mixed stable/ephemeral dependencies.
-
-**Time to complete**: ~15 minutes
-
-> **Already have a Terraform repository?** Don't follow this guide — you don't need
-> to build anything. Run `envie adopt` in it instead, and see
-> [Adopting an existing repository](#adopting-an-existing-repository) below.
+Two ways in, depending on what you have. If you already have Terraform, adopt it —
+that takes minutes and builds nothing. If you don't, the second half of this guide
+scaffolds a project you can deploy and tear down for free, to see the workflow
+before writing any Terraform of your own.
 
 ## Prerequisites
 
-- Envie installed (`cargo build --release`)
-- AWS credentials configured
-- Terraform installed (v1.0+)
-- Git (optional, for branch-based workflows)
+- Envie installed: `brew install fearlessfara/tap/envie`, or `cargo build --release`
+- Terraform 1.0+
+- AWS credentials in your shell, and the AWS CLI for S3 state. Envie shells out to
+  `terraform` and `aws`, which use the standard credential chain — it never reads
+  credentials itself.
 
 ## Adopting an existing repository
 
@@ -91,28 +89,20 @@ bucket and lock table are never deleted.
 
 ---
 
-The rest of this guide builds a project from scratch, which is worth reading if
-you want to understand the configuration Envie generated for you.
+## Starting from scratch
 
-## Step 1: Create a New Project
+The rest of this guide builds a project with `envie init`. Everything below is the
+actual output of the commands, in order — the scaffolded units use Terraform's
+built-in `terraform_data`, so you can deploy and destroy real environments without
+creating anything that costs money.
 
-Let's create a new project called "myapp":
+### 1. Create the project
 
 ```bash
-# Create project directory
-mkdir myapp
-cd myapp
-
-# Initialize Envie project
+mkdir myapp && cd myapp
 envie init --name myapp --description "My application infrastructure"
 ```
 
-**What this does**:
-- Creates `workspace.envie.yaml` with one ephemeral pattern and one stable environment
-- Creates two units under `units/`, the second reading the first's output
-- Creates `.gitignore` with Envie patterns, and a `README.md`
-
-**Output**:
 ```
 ✅ Created an Envie project in /path/to/myapp
 
@@ -129,513 +119,449 @@ nothing to deploy. With AWS credentials in your shell:
   envie delete --env pr-1             # remove it again
 ```
 
-The scaffolded units deploy as they are, so you can watch a whole environment
-being built and torn down before writing any Terraform of your own. Envie offers
-to create the state bucket and lock table on the first deploy; check the bucket
-name first, since S3 bucket names are global.
+That is the whole project:
 
-## Step 2: Configure Environments
+```
+workspace.envie.yaml
+units/db/envie.yaml
+units/db/main.tf
+units/api/envie.yaml
+units/api/main.tf
+.gitignore
+README.md
+```
 
-Open `workspace.envie.yaml` and configure your environments:
+A **unit** is a Terraform root module with its own state — any directory with an
+`envie.yaml` next to its `.tf` files. An **environment** is a complete set of those
+units, deployed together with state of its own.
+
+### 2. Read the configuration
+
+`workspace.envie.yaml` describes the environments and where their state goes:
 
 ```yaml
-version: '1.0'
+version: "1.0"
 
 project:
   name: myapp
   description: My application infrastructure
 
 environments:
-  # Ephemeral environments (one pattern for all temporary envs)
+  # One short-lived environment per feature, pull request or experiment.
+  # Created by deploying to any name not listed under stable.
   ephemeral:
     naming_pattern: "{project}-{id}"
-    backend:
+    key_pattern: "envie/ephemeral/{id}/{unit_path}/terraform.tfstate"
+    backend: &backend
       type: s3
       config:
-        bucket: "myapp-terraform-state"
-        region: "us-east-1"
-        key_pattern: "ephemeral/{workspace}/{path}/terraform.tfstate"
-        dynamodb_table: "myapp-terraform-locks"
+        # S3 bucket names are global, so this may need a suffix of your own.
+        # Envie offers to create the bucket and the lock table on first deploy.
+        bucket: myapp-tfstate
+        dynamodb_table: myapp-tflocks
         encrypt: "true"
+        region: eu-west-1
 
-  # Stable environments (explicitly defined)
   stable:
-    sandbox:
-      workspace: myapp-sandbox
-      description: Sandbox environment with test data
-      backend:
-        type: s3
-        config:
-          bucket: "myapp-terraform-state"
-          region: "us-east-1"
-          key_pattern: "stable/sandbox/{path}/terraform.tfstate"
-          dynamodb_table: "myapp-terraform-locks"
-          encrypt: "true"
-
-    production:
-      workspace: myapp-production
-      description: Production environment
-      backend:
-        type: s3
-        config:
-          bucket: "myapp-terraform-state-prod"
-          region: "us-east-1"
-          key_pattern: "production/{path}/terraform.tfstate"
-          dynamodb_table: "myapp-terraform-locks-prod"
-          encrypt: "true"
-
-defaults: {}
+    prod:
+      description: The long-lived environment
+      workspace: default
+      backend: *backend
+      key_pattern: "envie/prod/{unit_path}/terraform.tfstate"
 ```
 
-**Important**: Make sure the S3 buckets exist or Envie will create them on first deployment.
+**Check the bucket name before your first deploy** — S3 bucket names are global,
+so `myapp-tfstate` may well be taken.
 
-## Step 3: Review Generated Structure
+Ephemeral environments are not listed anywhere: deploying to any name that is not
+under `stable` creates one. Each gets its own state path (from `key_pattern`, where
+`{id}` is the environment name and `{unit_path}` the unit's directory) and its own
+Terraform workspace (from `naming_pattern`). `prod` uses Terraform's `default`
+workspace, which is what a repository that never used workspaces already has.
 
-Envie created example units for you. Let's look at the structure:
-
-```bash
-tree services/
-```
-
-```
-services/
-├── api/
-│   ├── envie.yaml
-│   └── modules/
-│       ├── gateway/
-│       │   └── main.tf
-│       ├── lambda/
-│       │   └── main.tf
-│       └── step-functions/
-│           └── main.tf
-├── database/
-│   ├── envie.yaml
-│   └── modules/
-│       ├── dynamodb/
-│       │   └── main.tf
-│       └── rds/
-│           └── main.tf
-└── networking/
-    ├── envie.yaml
-    └── modules/
-        ├── security-groups/
-        │   └── main.tf
-        ├── subnets/
-        │   └── main.tf
-        └── vpc/
-            └── main.tf
-```
-
-## Step 4: Understand Unit Configuration
-
-Let's look at the API lambda unit configuration:
-
-```bash
-cat services/api/modules/lambda/envie.yaml
-```
+Each unit's `envie.yaml` says what it needs:
 
 ```yaml
-name: lambda
-description: Lambda function for API handler
-unit_type: component
+name: api
+description: Stands in for an API. Reads the db unit's output.
+unit_type: service
 state_management: dedicated
 
-depends:
-  - path: ../../../database/modules/dynamodb
-    environment: stable.sandbox       # Use stable sandbox DB by default
-  - path: ../../../networking/modules/vpc
-    environment: ephemeral             # Use ephemeral VPC
+# Envie turns each of these into a terraform_remote_state data source
+# pointing at the environment being deployed. Override one with
+# -E <unit>:<environment> to read from somewhere else.
+dependencies:
+  - name: db
 ```
 
-**Key points**:
-- `name`: Unique identifier for this unit
-- `unit_type`: What kind of unit this is (component, service, module, layer)
-- `state_management`: How Terraform state is managed
-  - `dedicated`: Each unit gets its own state file
-  - `parent`: Shares state with parent unit
-  - `shared`: Shares state with other units
-- `depends`: What this unit depends on and which environment to use
+- `name` is how everything else refers to this unit: `--unit api`, `-E api:...`.
+- `dependencies` are other units, by `name` (or by `path` for a directory that has
+  no `envie.yaml` name yet). They fix the deployment order and become remote state
+  data sources.
+- `unit_type` (`service`, `module`, `component`, `layer`, `application`) and
+  `state_management` (`dedicated` by default) are descriptive; `dedicated` means
+  the unit gets a state file of its own, which is almost always what you want.
 
-## Step 5: Preview Deployment (Dry Run)
+`envie show` prints the same thing for the whole project:
 
-Before deploying, let's see what would happen:
+```
+📋 Envie Project Overview
+
+Project:
+  Name: myapp
+  Description: My application infrastructure
+
+Discovered Units:
+
+  Service:
+      📦 db - Stands in for a database. Produces a name other units read.
+         Path: units/db
+         State: Dedicated
+
+      📦 api - Stands in for an API. Reads the db unit's output.
+         Path: units/api
+         State: Dedicated
+         Dependencies:
+           - db
+```
+
+### 3. See the plan before running it
 
 ```bash
-envie deploy --unit api --env dev-123 --dry-run
+envie deploy --env pr-1 --dry-run
 ```
 
-**Output**:
 ```
-📋 Deployment Plan (Dry Run)
+📋 Deployment plan (dry run)
 
-Environment: dev-123
-Workspace: myapp-dev-123
+Environment: pr-1 (ephemeral)
+Workspace:   myapp-pr-1
+Backend:     s3
 
-Dependencies:
-  ✓ ../../../database/modules/dynamodb → stable.sandbox (myapp-sandbox)
-  ✓ ../../../networking/modules/vpc → ephemeral (myapp-dev-123)
+1. db
+   path:  units/db
+   state: envie/ephemeral/pr-1/units/db/terraform.tfstate
 
-Deployment Order:
-  1. dynamodb (Component)
-     Path: services/database/modules/dynamodb
-     State: Dedicated
+2. api
+   path:  units/api
+   state: envie/ephemeral/pr-1/units/api/terraform.tfstate
+   reads: db from ephemeral.pr-1
+          envie/ephemeral/pr-1/units/db/terraform.tfstate
 
-  2. vpc (Component)
-     Path: services/networking/modules/vpc
-     State: Dedicated
-
-  3. lambda (Component)
-     Path: services/api/modules/lambda
-     State: Dedicated
-
-📊 Summary:
-  Total units to deploy: 3
-  Component: 3
+2 unit(s) would be deployed.
 ```
 
-**What this shows**:
-- Lambda will be deployed to workspace `myapp-dev-123` (ephemeral)
-- Lambda will reference DynamoDB from workspace `myapp-sandbox` (stable)
-- Lambda will reference VPC from workspace `myapp-dev-123` (ephemeral)
-- Deployment order: dynamodb → vpc → lambda (dependencies first)
+`pr-1` is not declared anywhere, so it is an ephemeral environment. `db` is planned
+first because `api` reads it, and `api` reads the copy of `db` in its own
+environment.
 
-## Step 6: Deploy to Ephemeral Environment
+This runs no Terraform and needs no credentials, so it is worth reading whenever
+you are unsure what a command will do.
 
-Now let's actually deploy:
+### 4. Deploy it
 
 ```bash
-envie deploy --unit api --env dev-123 --verbose
+envie deploy --env pr-1
 ```
 
-**What happens**:
+The first deploy offers to create the state bucket and lock table:
 
-1. **Backend Setup** (first time only):
-   ```
-   🏗️  Backend Infrastructure Setup
-   📦 S3 Bucket to create: myapp-terraform-state
-   🔒 DynamoDB Table to create: myapp-terraform-locks
-   ```
-   Envie will prompt you to create the backend infrastructure if it doesn't exist.
+```
+🏗️  Backend Infrastructure Setup
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📦 S3 Bucket to create:
+   Name: myapp-tfstate
+   Region: eu-west-1
+   Purpose: Terraform state storage
 
-2. **Environment Resolution**:
-   ```
-   🔍 Resolving dependencies:
-     ├─ lambda
-     ├─  ../../../database/modules/dynamodb → stable.sandbox
-     │     Workspace: myapp-sandbox
-     │     State: s3://myapp-terraform-state/stable/sandbox/.../terraform.tfstate
-     └─  ../../../networking/modules/vpc → ephemeral
-           Workspace: myapp-dev-123
-           State: s3://myapp-terraform-state/ephemeral/myapp-dev-123/.../terraform.tfstate
-   ```
+🔒 DynamoDB Table to create:
+   Name: myapp-tflocks
+   Region: eu-west-1
+   Purpose: Terraform state locking
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-3. **Deployment**:
-   ```
-   🚀 Deploying 3 unit(s)...
+🚀 Deploying 2 unit(s) to pr-1
 
-   [1/3] Deploying: dynamodb
-     📍 Path: services/database/modules/dynamodb
-     🏷️  Type: Component
-     💾 State: Dedicated
-     🔧 Running terraform init...
-     ⚡ Running terraform apply...
-     ✅ Unit deployed successfully
+[1/2] db
+  📍 units/db
+  💾 envie/ephemeral/pr-1/units/db/terraform.tfstate
+  ⚡ terraform apply
+  ✅ done
 
-   [2/3] Deploying: vpc
-     ...
+[2/2] api
+  📍 units/api
+  💾 envie/ephemeral/pr-1/units/api/terraform.tfstate
+  ⚡ terraform apply
+  ✅ done
 
-   [3/3] Deploying: lambda
-     ...
+✅ pr-1 is deployed.
+```
 
-   ✅ Deployment complete!
-   ```
+If the bucket already exists — because a colleague deployed first, or you are
+adopting a repository — nothing is created and the deploy goes straight ahead.
 
-## Step 7: Verify Deployment
-
-Check what was created:
+### 5. See what it produced
 
 ```bash
-# List the environments that exist
+envie output --env pr-1
+```
+
+```
+📊 Outputs for pr-1
+
+┌─ api ─────────────────────────────────
+│  endpoint: https://pr-1.example.internal
+│  reads_table: myapp-pr-1-items
+└────────────────────────────────────────
+
+┌─ db ─────────────────────────────────
+│  table_name: myapp-pr-1-items
+└────────────────────────────────────────
+```
+
+Note `reads_table`: `api` was wired to `pr-1`'s own table, not to production's.
+
+To turn those outputs into a `.env` for an application, write a template naming
+the outputs you want as `unit.output`:
+
+```bash
+cat > .env.example <<'EOF'
+API_URL=api.endpoint
+TABLE_NAME=db.table_name
+LOG_LEVEL=debug
+EOF
+
+envie generate --env pr-1
+```
+
+```
+API_URL="https://pr-1.example.internal"
+TABLE_NAME="myapp-pr-1-items"
+LOG_LEVEL="debug"
+```
+
+Values that don't match a `unit.output` reference, like `LOG_LEVEL`, are copied
+through as written.
+
+### 6. Look at what Envie wrote into the units
+
+```bash
+cat units/api/envie.generated.tf
+```
+
+```hcl
+# Managed by Envie - do not edit, regenerated on every deploy.
+
+terraform {
+  backend "s3" {}
+}
+
+data "terraform_remote_state" "db" {
+  backend   = "s3"
+  workspace = "myapp-pr-1"
+
+  config = {
+    bucket         = "myapp-tfstate"
+    dynamodb_table = "myapp-tflocks"
+    encrypt        = "true"
+    key            = "envie/ephemeral/pr-1/units/db/terraform.tfstate"
+    region         = "eu-west-1"
+  }
+}
+
+locals {
+  envie_project_name   = "myapp"
+  envie_environment_id = "pr-1"
+  envie_unit_name      = "api"
+  envie_workspace      = "myapp-pr-1"
+
+  envie_common_tags = {
+    Project     = "myapp"
+    Environment = "pr-1"
+    Unit        = "api"
+    ManagedBy   = "envie"
+  }
+}
+```
+
+This is why `units/api/main.tf` can read `data.terraform_remote_state.db` and name
+resources after `local.envie_environment_id` without naming an environment
+anywhere. Deploy a different environment and the same file is rewritten to point
+at that environment's state.
+
+You may also see `envie_override.tf`. Envie writes that one only when your code
+already declares a block it needs to change — a Terraform
+[override file](https://developer.hashicorp.com/terraform/language/files/override)
+is how an existing `terraform_remote_state` block gets repointed at another
+environment without your code changing. The scaffolded units declare no such
+blocks, so only `envie.generated.tf` appears here.
+
+Both files are regenerated on every deploy, gitignored, and safe to delete —
+`envie clean` does it for you.
+
+### 7. Deploy the long-lived environment too
+
+```bash
+envie deploy --env prod
+```
+
+Same code, different environment. `prod` is declared under `stable`, so it goes to
+`envie/prod/...` in Terraform's `default` workspace, and its resources are named
+after `prod` rather than `pr-1`.
+
+```bash
 envie list
 ```
 
-**Output**:
 ```
 📋 Environments in myapp
 
 Long-lived
-  production  no deployment recorded
-              workspace default, state in s3://myapp-terraform-state
+  prod  deployed 2026-08-11 22:22 UTC (api, db)
+        workspace default, state in s3://myapp-tfstate
+        The long-lived environment
 
 Ephemeral
-  dev-123     deployed 2026-08-11 22:03 UTC (vpc, dynamodb, lambda)
-              workspace myapp-dev-123, state in s3://myapp-terraform-state
+  pr-1  deployed 2026-08-11 22:21 UTC (api, db)
+        workspace myapp-pr-1, state in s3://myapp-tfstate
 ```
 
-Add `--json` when a script needs to check whether an environment is still up.
+The long-lived environments come from `workspace.envie.yaml`; the ephemeral ones
+are found in the deployment records Envie keeps in the state backend, so they show
+up here even when somebody else deployed them from another machine. `--json` gives
+a script the same answer.
 
-## Step 8: Override Environment References
+### 8. Mix environments
 
-Now let's deploy the same lambda but pointing to a different database:
+The point of all this is being able to build part of an environment and borrow the
+rest. Deploy only `api`, reading production's `db`:
 
 ```bash
-# Deploy lambda to a new environment, but use production database
-envie deploy --unit lambda --env testing-prod-data \
-  -E database:stable.production \
-  --dry-run
+envie deploy --env pr-2 --unit api -E db:stable.prod --dry-run
 ```
 
-**Output**:
 ```
-📋 Deployment Plan (Dry Run)
+📋 Deployment plan (dry run)
 
-Environment: testing-prod-data
-Workspace: myapp-testing-prod-data
+Environment: pr-2 (ephemeral)
+Workspace:   myapp-pr-2
+Backend:     s3
 
-Dependencies:
-  ✓ ../../../database/modules/dynamodb → stable.production (myapp-production)
-  ✓ ../../../networking/modules/vpc → ephemeral (myapp-testing-prod-data)
-
-Deployment Order:
-  1. vpc (Component)
-  2. lambda (Component)
-
-📊 Summary:
-  Total units to deploy: 2
+1. api
+   path:  units/api
+   state: envie/ephemeral/pr-2/units/api/terraform.tfstate
+   reads: db from stable.prod (overridden)
+          envie/prod/units/db/terraform.tfstate
 ```
 
-Notice:
-- DynamoDB now points to `myapp-production` instead of `myapp-sandbox`
-- The `-E database:stable.production` override worked!
+`db` is not deployed at all, and `api` reads production's state instead of a `db`
+of its own. Envie records the override, so tearing `pr-2` down later needs no
+flags.
 
-## Step 9: Deploy All Units Under a Path
-
-Deploy all compute units at once:
+### 9. Tear it down
 
 ```bash
-envie deploy --unit services/api --env dev-456
+envie delete --env pr-1
 ```
 
-This deploys:
-- `services/api/modules/lambda`
-- `services/api/modules/gateway`
-- `services/api/modules/step-functions`
+```
+Step 1: destroying infrastructure
 
-All in the correct dependency order!
+  api
+    ✅ destroyed
 
-## Step 10: View Generated Files
+  db
+    ✅ destroyed
 
-Envie generated Terraform files for you. Let's look at what was created:
+Step 2: removing state
+
+✅ 'pr-1' is gone. The state backend was left untouched.
+```
+
+Units are destroyed in reverse dependency order, and `envie list` stops reporting
+the environment. `delete` refuses to touch a long-lived environment, and never
+removes the state bucket or lock table — those are shared.
+
+For a long-lived environment, `destroy` removes the infrastructure but keeps the
+environment declared and its state file in place:
 
 ```bash
-cd services/api/modules/lambda
-ls -la *.tf
+envie destroy --env prod --dry-run   # see the order first
+envie destroy --env prod             # asks you to type the environment name
 ```
 
-```
-envie-backend.tf          # Backend configuration (workspace, S3)
-envie-remote-state.tf     # Remote state data sources for dependencies
-main.tf                   # Your Terraform code (you wrote this)
-```
+Finally, `envie clean` removes the generated files from every unit:
 
-**envie-backend.tf**:
-```hcl
-# Backend configuration generated by Envie
-# State management: Dedicated
-# State key: ephemeral/myapp-dev-123/services/api/modules/lambda/terraform.tfstate
+```
+units/api
+  removed envie.generated.tf
+units/db
+  removed envie.generated.tf
 
-terraform {
-  backend "s3" {
-    bucket = "myapp-terraform-state"
-    region = "us-east-1"
-    key = "ephemeral/myapp-dev-123/services/api/modules/lambda/terraform.tfstate"
-    dynamodb_table = "myapp-terraform-locks"
-    encrypt = "true"
-  }
-}
+✅ Removed 2 file(s).
 ```
 
-**envie-remote-state.tf**:
-```hcl
-# Auto-generated by Envie - DO NOT EDIT
+## Common workflows
 
-data "terraform_remote_state" "database_dynamodb" {
-  backend = "s3"
-  workspace = "myapp-sandbox"
-
-  config = {
-    bucket = "myapp-terraform-state"
-    region = "us-east-1"
-    key = "stable/sandbox/database/dynamodb/terraform.tfstate"
-    dynamodb_table = "myapp-terraform-locks"
-    encrypt = "true"
-  }
-}
-
-data "terraform_remote_state" "networking_vpc" {
-  backend = "s3"
-  workspace = "myapp-dev-123"
-
-  config = {
-    bucket = "myapp-terraform-state"
-    region = "us-east-1"
-    key = "ephemeral/myapp-dev-123/networking/vpc/terraform.tfstate"
-    dynamodb_table = "myapp-terraform-locks"
-    encrypt = "true"
-  }
-}
-```
-
-Now in your `main.tf`, you can reference these:
-
-```hcl
-resource "aws_lambda_function" "main" {
-  function_name = "myapp-api-${var.environment_id}"
-
-  vpc_config {
-    subnet_ids = data.terraform_remote_state.networking_vpc.outputs.subnet_ids
-    security_group_ids = [data.terraform_remote_state.networking_vpc.outputs.security_group_id]
-  }
-
-  environment {
-    variables = {
-      DB_TABLE = data.terraform_remote_state.database_dynamodb.outputs.table_name
-    }
-  }
-}
-```
-
-## Step 11: Clean Up
-
-When you're done with an ephemeral environment:
+### One environment per pull request
 
 ```bash
-# Destroy just the resources
-envie destroy --env dev-123
-
-# Or completely delete everything (resources + backend)
-envie delete --env dev-123
+envie deploy --env pr-42          # build it
+envie generate --env pr-42        # point the app at it
+envie delete --env pr-42          # when the PR closes
 ```
 
-**destroy** vs **delete**:
-- `destroy`: Destroys Terraform resources, keeps backend infrastructure (S3/DynamoDB)
-- `delete`: Destroys resources AND deletes backend infrastructure (complete cleanup)
-
-## Common Workflows
-
-### Developer Feature Branch Workflow
+### Iterating on one unit against shared dependencies
 
 ```bash
-# 1. Create feature branch
-git checkout -b feature-auth
+# Build only the API, reading production's database.
+envie deploy --env pr-42 --unit api -E db:stable.prod
 
-# 2. Deploy to ephemeral (use stable DB for speed)
-envie deploy --unit api --env feature-auth \
-  -E database:stable.sandbox \
-  -E networking:stable.sandbox
-
-# 3. Make code changes, redeploy
-# ... edit main.tf ...
-envie deploy --unit api --env feature-auth
-
-# 4. When done, clean up
-envie delete --env feature-auth
+# Edit units/api/main.tf, then redeploy just that unit.
+envie deploy --env pr-42 --unit api
 ```
 
-### Full Isolation Testing
+Faster than rebuilding everything, and the override is replayed on teardown.
+
+### From inside a unit directory
 
 ```bash
-# Deploy everything to isolated environment
-envie deploy --unit services --env integration-test
-
-# Run tests...
-
-# Clean up
-envie delete --env integration-test
+cd units/api
+envie deploy --env pr-42
 ```
 
-### Testing Against Production Data
-
-```bash
-# Deploy your code to ephemeral, but read from production DB
-envie deploy --unit api --env test-with-prod \
-  -E database:stable.production \
-  -E networking:stable.sandbox
-
-# Your API code runs in ephemeral environment
-# But reads from production database (ensure read-only!)
-```
-
-## Tips & Tricks
-
-### 1. Use Dry Run Before Deploying
-```bash
-envie deploy --unit api --env my-test --dry-run
-```
-Always preview what will be deployed!
-
-### 2. Use Verbose Mode for Debugging
-```bash
-envie deploy --unit api --env my-test --verbose
-```
-Shows detailed environment resolution and state file paths.
-
-### 3. Deploy from Unit Directory
-```bash
-cd services/api/modules/lambda
-envie deploy --env dev-123
-```
-Envie auto-detects you're in a unit directory.
-
-### 4. Check What's Deployed
-```bash
-envie list
-```
-See every environment that exists, and what each one has deployed.
-
-### 5. View Unit Details
-```bash
-envie show --unit lambda
-```
-See dependencies, state management, and configuration.
-
-## Next Steps
-
-Now that you've completed the quickstart:
-
-1. **Customize the units**: Replace example Terraform code with your actual infrastructure
-2. **Add more stable environments**: Define staging, production, etc. in `workspace.envie.yaml`
-3. **Create CI/CD integration**: Use Envie in your pipeline for automated deployments
-4. **Read advanced docs**:
-   - [ENVIRONMENT_OVERRIDES.md](ENVIRONMENT_OVERRIDES.md) - Deep dive into environment overrides
-   - [STATE_MANAGEMENT_UX_ANALYSIS.md](STATE_MANAGEMENT_UX_ANALYSIS.md) - State management details
+Envie finds the project root and works out which unit you are in, so `--unit` is
+optional.
 
 ## Troubleshooting
 
-### Backend bucket doesn't exist
-```
-Error: Failed to create backend infrastructure
-```
-**Solution**: Make sure you have AWS credentials configured and permissions to create S3 buckets.
+**`no workspace.envie.yaml found in ... or any parent directory`**
+You are outside an Envie project. Run `envie adopt` in a Terraform repository, or
+`envie init` in an empty directory.
 
-### Invalid environment reference
-```
-Error: Invalid stable environment 'stable.sanbox' in unit 'lambda'
-```
-**Solution**: Typo in environment name. Check `workspace.envie.yaml` for available stable environments.
+**`unknown stable environment 'stagng' (declared stable environments: prod)`**
+A typo, or an environment you haven't declared. Bare names that are not declared
+are treated as ephemeral ids, so `--env stagng` would otherwise have quietly built
+a new environment; `stable.` prefixes are checked.
 
-### Workspace already exists
-Just select the existing workspace - Envie handles this automatically.
+**Terraform proposes to create resources that already exist**
+The state path is wrong for that environment. On an adopted repository, check
+`state_keys` in `workspace.envie.yaml` against the state paths your repository
+actually uses, and do not apply until a dry run is clean.
 
-### State file conflicts
-If you get state locking errors, check if another deployment is running.
+**`could not read s3://.../envie/manifests/: Unable to locate credentials`**
+`envie list` reports this rather than pretending the list is complete. Declared
+environments are still listed; the ephemeral ones need credentials for the bucket.
 
-## Getting Help
+**A deploy left resources behind after failing**
+Deploys are not transactional: units already applied stay applied. Fix the problem
+and deploy again, or tear the environment down with `envie delete --env <id>`.
 
-- Check verbose output: `envie deploy --verbose`
-- Use dry-run: `envie deploy --dry-run`
-- Check [GitHub Issues](https://github.com/your-org/envie/issues)
+## Next steps
 
----
-
-**Congratulations!** You've successfully deployed infrastructure with Envie. 🎉
+- [README.md](README.md) — what Envie generates, how state and dependencies are
+  resolved, and the full command list
+- [ENVIRONMENT_OVERRIDES.md](ENVIRONMENT_OVERRIDES.md) — `-E` in more depth
+- [examples/](examples/) — six real repository layouts, each with a `vanilla`
+  version and the same repository after adoption
+- Issues and questions: <https://github.com/fearlessfara/envie/issues>
