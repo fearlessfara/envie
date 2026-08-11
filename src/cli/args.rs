@@ -189,19 +189,11 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Show detailed information about units and dependencies
+    /// Show the units in this project and what they depend on
     Show {
         /// The name of the unit to show (optional - shows all if not provided)
         #[arg(long)]
         unit: Option<String>,
-
-        /// Show only sub-unit information
-        #[arg(long)]
-        modules: bool,
-
-        /// Show only dependency information
-        #[arg(long)]
-        dependencies: bool,
 
         /// Print detailed output during execution
         #[arg(long)]

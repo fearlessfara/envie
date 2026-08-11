@@ -1,1 +1,0 @@
-aws-vault: error: exec: fork/exec ../../target/release/envie: no such file or directory

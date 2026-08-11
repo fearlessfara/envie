@@ -526,7 +526,9 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
-fn normalize_relative(path: &Path) -> PathBuf {
+/// A relative path with `.` and `..` resolved textually, for comparing a
+/// declared dependency path against a discovered unit's path.
+pub(crate) fn normalize_relative(path: &Path) -> PathBuf {
     let mut out: Vec<std::ffi::OsString> = Vec::new();
     for component in path.components() {
         match component {

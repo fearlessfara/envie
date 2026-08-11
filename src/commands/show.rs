@@ -1,6 +1,13 @@
-use crate::common::service_config::WorkspaceConfig;
+//! The units in a project, and what depends on what.
+//!
+//! The counterpart to `envie list`: that answers which environments exist, this
+//! answers what an environment is made of. Neither runs Terraform.
+
+use crate::common::deployment::normalize_relative;
+use crate::common::project::Project;
+use crate::common::unit_config::{DependencyReference, StateManagement, UnitType};
 use crate::common::*;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct ShowOptions {
@@ -22,172 +29,211 @@ impl ShowCommand {
     }
 
     pub fn execute(&self, options: ShowOptions) -> Result<()> {
+        // Discovery starts at the project root, not the current directory, so
+        // that running this from inside a unit still describes the whole project.
+        let project = Project::discover(&self.working_directory)?;
+        let registry = project.units()?;
+
         if options.verbose {
-            println!("🔍 Analyzing Envie project structure...");
+            println!("🔍 Reading {}\n", project.root.display());
         }
 
-        // Discover all units using the new flexible system
-        let mut discovery = UnitDiscovery::new(self.working_directory.clone());
-        discovery.discover_all()?;
+        let mut units = registry.get_all_units();
+        units.sort_by(|a, b| a.path.cmp(&b.path));
 
-        if let Some(unit_name) = &options.unit {
-            // Show specific unit
-            self.show_unit(unit_name, &discovery, &options)?;
-        } else {
-            // Show all units
-            self.show_all_units(&discovery, &options)?;
+        match &options.unit {
+            Some(name) => {
+                let unit = registry.get_unit(name).ok_or_else(|| {
+                    let known: Vec<&str> =
+                        units.iter().map(|unit| unit.config.name.as_str()).collect();
+                    EnvieError::ValidationError(format!(
+                        "no unit called '{}' (units in this project: {})",
+                        name,
+                        known.join(", ")
+                    ))
+                })?;
+                self.print_unit(unit, &units);
+            }
+            None => self.print_all(&project, &units),
         }
 
         Ok(())
     }
 
-    fn show_all_units(&self, discovery: &UnitDiscovery, _options: &ShowOptions) -> Result<()> {
-        self.output_manager.print_green("📋 Envie Project Overview");
-        println!();
-
-        // Show project info if workspace.envie.yaml exists
-        if let Ok(workspace_config) = self.load_workspace_config() {
-            if let Some(project) = &workspace_config.project {
-                self.output_manager.print_blue("Project:");
-                println!("  Name: {}", project.name);
-                println!("  Description: {}", project.description);
-                println!();
-            }
-        }
-
-        // Show all discovered units grouped by type
-        self.output_manager.print_blue("Discovered Units:");
-        println!();
-
-        // Group by unit type
-        for unit_type in [
-            UnitType::Layer,
-            UnitType::Application,
-            UnitType::Service,
-            UnitType::Component,
-            UnitType::Module,
-        ] {
-            let units = discovery.get_units_by_type(&unit_type);
-            if !units.is_empty() {
-                println!("  {:?}:", unit_type);
-                for unit in units {
-                    let indent = "  ".repeat(unit.level + 2);
-                    println!(
-                        "{}📦 {} - {}",
-                        indent, unit.config.name, unit.config.description
-                    );
-                    println!("{}   Path: {}", indent, unit.path.display());
-                    println!("{}   State: {:?}", indent, unit.config.state_management);
-
-                    if !unit.config.dependencies.is_empty() {
-                        println!("{}   Dependencies:", indent);
-                        for dep in &unit.config.dependencies {
-                            let dep_display = dep
-                                .name()
-                                .cloned()
-                                .or_else(|| dep.path().cloned())
-                                .unwrap_or_else(|| "unknown".to_string());
-                            println!("{}     - {}", indent, dep_display);
-                        }
-                    }
-                    println!();
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn show_unit(
-        &self,
-        unit_name: &str,
-        discovery: &UnitDiscovery,
-        _options: &ShowOptions,
-    ) -> Result<()> {
-        // Find the unit
-        let unit = discovery.registry.get_unit(unit_name).ok_or_else(|| {
-            EnvieError::ValidationError(format!("Unit '{}' not found", unit_name))
-        })?;
-
+    fn print_all(&self, project: &Project, units: &[&DiscoveredUnit]) {
         self.output_manager
-            .print_green(&format!("📦 Unit: {}", unit_name));
-        println!();
+            .print_green(&format!("📋 Units in {}\n", project.name()));
 
-        println!("  Type: {:?}", unit.config.unit_type);
-        println!("  Description: {}", unit.config.description);
-        println!("  Path: {}", unit.path.display());
-        println!("  Level: {} (depth in structure)", unit.level);
-        println!("  State Management: {:?}", unit.config.state_management);
-        println!();
+        let width = units
+            .iter()
+            .map(|unit| unit.config.name.len())
+            .max()
+            .unwrap_or(0)
+            .max(4);
 
-        if !unit.config.dependencies.is_empty() {
-            self.output_manager.print_blue("  Dependencies:");
-            for dep in &unit.config.dependencies {
-                let dep_display = dep
-                    .name()
-                    .cloned()
-                    .or_else(|| dep.path().cloned())
-                    .unwrap_or_else(|| "unknown".to_string());
-                println!("    📎 {}", dep_display);
+        for unit in units {
+            println!(
+                "  {:width$}  {}",
+                unit.config.name,
+                display_path(&unit.path),
+                width = width
+            );
+            if !unit.config.description.is_empty() {
+                println!(
+                    "  {:width$}  {}",
+                    "",
+                    unit.config.description,
+                    width = width
+                );
             }
-            println!();
-        }
-
-        if !unit.children.is_empty() {
-            self.output_manager.print_blue("  Child Units:");
-            for child_path in &unit.children {
-                if let Some(child) = discovery.registry.get_unit_by_path(child_path) {
-                    println!("    - {}", child.config.name);
-                }
-            }
-            println!();
-        }
-
-        if let Some(parent_path) = &unit.parent {
-            if let Some(parent) = discovery.registry.get_unit_by_path(parent_path) {
-                self.output_manager.print_blue("  Parent Unit:");
-                println!("    - {}", parent.config.name);
-                println!();
+            if !unit.config.dependencies.is_empty() {
+                println!(
+                    "  {:width$}  reads {}",
+                    "",
+                    unit.config
+                        .dependencies
+                        .iter()
+                        .map(dependency_label)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    width = width
+                );
             }
         }
 
-        Ok(())
+        println!("\nEnvironments: envie list");
     }
 
-    fn load_workspace_config(&self) -> Result<WorkspaceConfig> {
-        let workspace_file = self.working_directory.join("workspace.envie.yaml");
-        if !workspace_file.exists() {
-            return Err(EnvieError::ValidationError(
-                "No workspace.envie.yaml found. Run 'envie init' first.".to_string(),
-            ));
+    fn print_unit(&self, unit: &DiscoveredUnit, all: &[&DiscoveredUnit]) {
+        self.output_manager
+            .print_green(&format!("📦 {}\n", unit.config.name));
+
+        if !unit.config.description.is_empty() {
+            println!("  {}\n", unit.config.description);
         }
 
-        let content = std::fs::read_to_string(&workspace_file)?;
-        let config: WorkspaceConfig = serde_yaml::from_str(&content)?;
-        Ok(config)
+        println!("  path     {}", display_path(&unit.path));
+        println!("  type     {}", describe_type(&unit.config.unit_type));
+        println!(
+            "  state    {}",
+            describe_state(&unit.config.state_management)
+        );
+
+        let reads: Vec<String> = unit
+            .config
+            .dependencies
+            .iter()
+            .map(|dependency| match resolve(dependency, &unit.path, all) {
+                Some(target) => format!("{} ({})", target.config.name, display_path(&target.path)),
+                // Worth saying out loud: a dependency that resolves to nothing is
+                // why a deploy will fail, and it is invisible otherwise.
+                None => format!("{} — no such unit", dependency_label(dependency)),
+            })
+            .collect();
+        println!(
+            "  reads    {}",
+            if reads.is_empty() {
+                "nothing".to_string()
+            } else {
+                reads.join(", ")
+            }
+        );
+
+        let read_by: Vec<&str> = all
+            .iter()
+            .filter(|other| {
+                other.config.dependencies.iter().any(|dependency| {
+                    resolve(dependency, &other.path, all)
+                        .is_some_and(|target| target.path == unit.path)
+                })
+            })
+            .map(|other| other.config.name.as_str())
+            .collect();
+        println!(
+            "  read by  {}",
+            if read_by.is_empty() {
+                "nothing".to_string()
+            } else {
+                read_by.join(", ")
+            }
+        );
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    let shown = path.to_string_lossy().replace('\\', "/");
+    if shown.is_empty() {
+        ".".to_string()
+    } else {
+        shown
+    }
+}
+
+fn dependency_label(dependency: &DependencyReference) -> String {
+    dependency
+        .name()
+        .or_else(|| dependency.path())
+        .cloned()
+        .unwrap_or_else(|| "unnamed".to_string())
+}
+
+/// The unit a dependency refers to, by name or by path relative to `from`.
+fn resolve<'a>(
+    dependency: &DependencyReference,
+    from: &Path,
+    all: &[&'a DiscoveredUnit],
+) -> Option<&'a DiscoveredUnit> {
+    if let Some(name) = dependency.name() {
+        return all.iter().find(|unit| &unit.config.name == name).copied();
+    }
+
+    let path = dependency.path()?;
+    let resolved = normalize_relative(&from.join(path));
+    all.iter()
+        .find(|unit| unit.path == resolved)
+        .or_else(|| {
+            let trimmed = path.trim_start_matches("./").trim_start_matches("../");
+            all.iter().find(|unit| unit.config.name == trimmed)
+        })
+        .copied()
+}
+
+fn describe_type(unit_type: &UnitType) -> String {
+    match unit_type {
+        UnitType::Service => "service".to_string(),
+        UnitType::Module => "module".to_string(),
+        UnitType::Component => "component".to_string(),
+        UnitType::Layer => "layer".to_string(),
+        UnitType::Application => "application".to_string(),
+        UnitType::Custom(name) => name.clone(),
+    }
+}
+
+fn describe_state(state: &StateManagement) -> String {
+    match state {
+        StateManagement::Dedicated => "its own state file".to_string(),
+        StateManagement::Parent => "shares its parent unit's state".to_string(),
+        StateManagement::Shared(id) => format!("shares the state '{}'", id),
+        StateManagement::Group(id) => format!("part of the state group '{}'", id),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     #[test]
-    fn test_show_command_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let show_cmd = ShowCommand::new(temp_dir.path().to_path_buf());
-        assert_eq!(show_cmd.working_directory, temp_dir.path());
+    fn a_flat_root_shows_as_a_dot_rather_than_nothing() {
+        assert_eq!(display_path(Path::new("")), ".");
+        assert_eq!(display_path(Path::new("units/api")), "units/api");
     }
 
     #[test]
-    fn test_show_options() {
-        let options = ShowOptions {
-            unit: Some("test-unit".to_string()),
-            verbose: true,
-        };
-
-        assert_eq!(options.unit, Some("test-unit".to_string()));
-        assert!(options.verbose);
+    fn descriptions_avoid_leaking_rust_names() {
+        assert_eq!(describe_type(&UnitType::Service), "service");
+        assert_eq!(
+            describe_state(&StateManagement::Shared("core".to_string())),
+            "shares the state 'core'"
+        );
     }
 }

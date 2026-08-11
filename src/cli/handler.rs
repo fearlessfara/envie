@@ -171,12 +171,7 @@ impl CommandHandler {
                 let cleaner = CleanCommand::new(self.working_directory.clone());
                 cleaner.execute(options)
             }
-            Commands::Show {
-                unit,
-                modules: _,
-                dependencies: _,
-                verbose,
-            } => {
+            Commands::Show { unit, verbose } => {
                 let options = ShowOptions { unit, verbose };
 
                 let shower = ShowCommand::new(self.working_directory.clone());

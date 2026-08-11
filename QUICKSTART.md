@@ -202,27 +202,33 @@ dependencies:
   `state_management` (`dedicated` by default) are descriptive; `dedicated` means
   the unit gets a state file of its own, which is almost always what you want.
 
-`envie show` prints the same thing for the whole project:
+`envie show` prints the same thing for the whole project, from anywhere inside it:
 
 ```
-📋 Envie Project Overview
+📋 Units in myapp
 
-Project:
-  Name: myapp
-  Description: My application infrastructure
+  api   units/api
+        Stands in for an API. Reads the db unit's output.
+        reads db
+  db    units/db
+        Stands in for a database. Produces a name other units read.
 
-Discovered Units:
+Environments: envie list
+```
 
-  Service:
-      📦 db - Stands in for a database. Produces a name other units read.
-         Path: units/db
-         State: Dedicated
+`envie show --unit api` adds what reads it, which is the question worth asking
+before changing a unit:
 
-      📦 api - Stands in for an API. Reads the db unit's output.
-         Path: units/api
-         State: Dedicated
-         Dependencies:
-           - db
+```
+📦 api
+
+  Stands in for an API. Reads the db unit's output.
+
+  path     units/api
+  type     service
+  state    its own state file
+  reads    db (units/db)
+  read by  nothing
 ```
 
 ### 3. See the plan before running it

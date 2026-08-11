@@ -15,5 +15,11 @@ terraform.tfvars
 units/api/lambda/node_modules/
 units/api/lambda/package-lock.json
 
+# Build and run artifacts: the archive_file output, and whatever a deploy left
+# behind. All regenerated, none of it worth cloning.
+units/api/builds/
+deploy.log
+outputs.json
+
 # OS files
 .DS_Store
