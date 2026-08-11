@@ -1,0 +1,4 @@
+name: api
+unit_type: service
+state_management: dedicated
+dependencies: []

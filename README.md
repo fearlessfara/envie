@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Envie" width="160" />
+</p>
+
 # Envie
 
 Envie gives an existing Terraform repository as many environments as you want,
@@ -220,7 +224,7 @@ environment stops being reported as deployed.
 | `envie delete --env <id>` | Destroy an ephemeral environment and remove its state |
 | `envie list` | Show which environments exist, declared and deployed |
 | `envie show` | Show units and their dependencies |
-| `envie output --env <id>` | Show an environment's Terraform outputs |
+| `envie output --env <id>` | Show an environment's Terraform outputs (`--format` table/json/yaml/env); see [examples/api-output-export](examples/api-output-export/) |
 | `envie generate --env <id>` | Fill a `.env` template from an environment's outputs |
 | `envie clean` | Remove generated files |
 

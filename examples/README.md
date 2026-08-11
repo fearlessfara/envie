@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/logo.png" alt="Envie" width="120" />
+</p>
+
 # Examples
 
 Paired folders measure how much an existing Terraform repo has to change to get Envie’s ephemeral environments.
@@ -20,6 +24,7 @@ Write vanilla first, then add Envie. Prefer `envie adopt` over rewriting `.tf`.
 | [partial-backend-config](partial-backend-config/) | Empty `backend "s3" {}`, `config/*.tfbackend` and `config/*.tfvars` per environment | Drop-in |
 | [monorepo-scattered](monorepo-scattered/) | Roots at `platform/network` and `services/api/terraform` among application code | Drop-in |
 | [full_backend](full_backend/) | Envie-native multi-unit serverless (no vanilla pair) | — |
+| [api-output-export](api-output-export/) | Envie-native HTTP API + Lambda; `envie output` env/json/yaml then JS smoke tests | — |
 
 In every pair, `02-envie` is `01-vanilla` plus `workspace.envie.yaml` and
 `envie.yaml`. No `.tf` file differs, which is the point: if adoption needs you to

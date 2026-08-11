@@ -167,7 +167,7 @@ pub enum Commands {
         #[arg(short = 'f', long)]
         file: Option<PathBuf>,
 
-        /// Output format (json or table)
+        /// Output format: table, json, yaml, or env
         #[arg(long, default_value = "table")]
         format: String,
 

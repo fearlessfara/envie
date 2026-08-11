@@ -1,0 +1,17 @@
+version: "1.0"
+
+project:
+  name: envie-test-api-export
+  description: HTTP API + Lambda demo for envie output export (env/json/yaml) and JS smoke tests
+
+environments:
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    key_pattern: "envie/ephemeral/{id}/{unit_path}/terraform.tfstate"
+    backend:
+      type: s3
+      config:
+        bucket: envie-test-api-export-tfstate
+        dynamodb_table: envie-test-api-export-tflocks
+        encrypt: "true"
+        region: eu-west-1

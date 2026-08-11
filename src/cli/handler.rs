@@ -145,7 +145,14 @@ impl CommandHandler {
             } => {
                 let output_format = match format.as_str() {
                     "json" => crate::commands::output::OutputFormat::Json,
-                    _ => crate::commands::output::OutputFormat::Table,
+                    "yaml" => crate::commands::output::OutputFormat::Yaml,
+                    "env" => crate::commands::output::OutputFormat::Env,
+                    "table" => crate::commands::output::OutputFormat::Table,
+                    other => {
+                        return Err(crate::common::EnvieError::ValidationError(format!(
+                            "unknown --format '{other}'; expected table, json, yaml, or env"
+                        )));
+                    }
                 };
 
                 let options = OutputOptions {
