@@ -1,4 +1,6 @@
 # Envie generated files (auto-generated, should not be committed)
+envie_override.tf
+envie.generated.tf
 *.envie.tf
 
 # Terraform files

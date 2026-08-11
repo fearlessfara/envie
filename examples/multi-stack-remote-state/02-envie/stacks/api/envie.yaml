@@ -1,0 +1,8 @@
+name: api
+unit_type: service
+state_management: dedicated
+
+# Inferred from the terraform_remote_state data sources already in this module.
+# Envie repoints them per environment, so the same code can read from any environment.
+dependencies:
+  - name: data

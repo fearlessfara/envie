@@ -1,0 +1,10 @@
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+envie_override.tf
+envie.generated.tf
+*.envie.tf
+**/lambda/function.zip
+.DS_Store

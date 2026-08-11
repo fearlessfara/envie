@@ -1,0 +1,5 @@
+bucket         = "envie-test-partial-tfstate"
+key            = "prod/terraform.tfstate"
+region         = "eu-west-1"
+dynamodb_table = "envie-test-partial-tflocks"
+encrypt        = true

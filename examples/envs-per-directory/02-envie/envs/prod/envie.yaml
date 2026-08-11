@@ -1,0 +1,6 @@
+name: prod
+unit_type: service
+state_management: dedicated
+
+# No cross-stack reads were found in this module's Terraform code.
+dependencies: []

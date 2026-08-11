@@ -1,0 +1,55 @@
+version: "1.0"
+
+project:
+  name: envie-test-envdirs
+  description: Adopted from an existing Terraform repository by envie
+
+environments:
+  # One short-lived environment per feature, pull request or experiment.
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    key_pattern: "envie/ephemeral/{id}/{unit_path}/terraform.tfstate"
+    backend:
+      type: s3
+      config:
+        bucket: envie-test-envdirs-tfstate
+        dynamodb_table: envie-test-envdirs-tflocks
+        encrypt: "true"
+        region: eu-west-1
+
+  stable:
+    prod:
+      description: The environment this repository already had
+      # This infrastructure was built from the variable defaults in the
+      # Terraform itself. Envie leaves those alone here, so deploying this
+      # environment changes nothing. Other environments still get the
+      # environment name injected, which is what keeps them apart.
+      keep_repository_defaults: true
+      # 'default' is the workspace the repository's existing state lives in.
+      workspace: default
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-envdirs-tfstate
+          dynamodb_table: envie-test-envdirs-tflocks
+          encrypt: "true"
+          region: eu-west-1
+      # State paths as they already exist. Envie reuses these instead of
+      # deriving new ones, so deploying to this environment manages the
+      # infrastructure you already have rather than creating a second copy.
+      state_keys:
+        envs/dev: dev/terraform.tfstate
+        envs/prod: prod/terraform.tfstate
+
+    dev:
+      # State paths are derived, so this environment starts empty. If it
+      # already exists elsewhere, pin its paths with state_keys as
+      # 'prod' does above.
+      workspace: dev
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-envdirs-tfstate
+          dynamodb_table: envie-test-envdirs-tflocks
+          encrypt: "true"
+          region: eu-west-1

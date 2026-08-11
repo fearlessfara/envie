@@ -1,0 +1,64 @@
+version: "1.0"
+
+project:
+  name: envie-test-partial
+  description: Adopted from an existing Terraform repository by envie
+
+environments:
+  # One short-lived environment per feature, pull request or experiment.
+  ephemeral:
+    naming_pattern: "{project}-{id}"
+    key_pattern: "envie/ephemeral/{id}/{unit_path}/terraform.tfstate"
+    backend:
+      type: s3
+      config:
+        bucket: envie-test-partial-tfstate
+        dynamodb_table: envie-test-partial-tflocks
+        encrypt: "true"
+        region: eu-west-1
+
+  stable:
+    prod:
+      description: The environment this repository already had
+      # This infrastructure was built from the variable defaults in the
+      # Terraform itself. Envie leaves those alone here, so deploying this
+      # environment changes nothing. Other environments still get the
+      # environment name injected, which is what keeps them apart.
+      keep_repository_defaults: true
+      # 'default' is the workspace the repository's existing state lives in.
+      workspace: default
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-partial-tfstate
+          dynamodb_table: envie-test-partial-tflocks
+          encrypt: "true"
+          region: eu-west-1
+      # State paths as they already exist. Envie reuses these instead of
+      # deriving new ones, so deploying to this environment manages the
+      # infrastructure you already have rather than creating a second copy.
+      state_keys:
+        ".": prod/terraform.tfstate
+      # Applied per unit, and skipped where the file does not exist.
+      var_files:
+        - config/prod.tfvars
+
+    staging:
+      # This environment already exists too, so it keeps the values the
+      # repository holds for it rather than being renamed, and stays in
+      # the workspace its state is in.
+      keep_repository_defaults: true
+      workspace: default
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-partial-tfstate
+          dynamodb_table: envie-test-partial-tflocks
+          encrypt: "true"
+          region: eu-west-1
+      # Found in this repository's own backend settings for this
+      # environment, so deploying it manages what already exists.
+      state_keys:
+        ".": staging/terraform.tfstate
+      var_files:
+        - config/staging.tfvars

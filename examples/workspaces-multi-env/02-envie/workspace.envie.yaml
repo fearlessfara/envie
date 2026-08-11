@@ -1,0 +1,69 @@
+version: "1.0"
+
+project:
+  name: envie-test-workspaces
+  description: Adopted from an existing Terraform repository by envie
+
+environments:
+  # One short-lived environment per feature, pull request or experiment.
+  ephemeral:
+    # This repository names things from terraform.workspace, so the
+    # workspace is the environment id and nothing else. The state path is
+    # the same for every environment; the backend's workspace_key_prefix
+    # is what keeps them apart, exactly as it does today.
+    naming_pattern: "{id}"
+    key_pattern: "terraform.tfstate"
+    backend:
+      type: s3
+      config:
+        bucket: envie-test-workspaces-tfstate
+        dynamodb_table: envie-test-workspaces-tflocks
+        encrypt: "true"
+        region: eu-west-1
+        workspace_key_prefix: env
+
+  stable:
+    prod:
+      description: The environment this repository already had
+      # This infrastructure was built from the variable defaults in the
+      # Terraform itself. Envie leaves those alone here, so deploying this
+      # environment changes nothing. Other environments still get the
+      # environment name injected, which is what keeps them apart.
+      keep_repository_defaults: true
+      # The Terraform workspace this environment's state already lives in.
+      workspace: prod
+      key_pattern: "terraform.tfstate"
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-workspaces-tfstate
+          dynamodb_table: envie-test-workspaces-tflocks
+          encrypt: "true"
+          region: eu-west-1
+          workspace_key_prefix: env
+
+    staging:
+      # If 'staging' already exists as a Terraform workspace, this manages it.
+      workspace: staging
+      key_pattern: "terraform.tfstate"
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-workspaces-tfstate
+          dynamodb_table: envie-test-workspaces-tflocks
+          encrypt: "true"
+          region: eu-west-1
+          workspace_key_prefix: env
+
+    dev:
+      # If 'dev' already exists as a Terraform workspace, this manages it.
+      workspace: dev
+      key_pattern: "terraform.tfstate"
+      backend:
+        type: s3
+        config:
+          bucket: envie-test-workspaces-tfstate
+          dynamodb_table: envie-test-workspaces-tflocks
+          encrypt: "true"
+          region: eu-west-1
+          workspace_key_prefix: env
