@@ -108,22 +108,9 @@ jobs:
 
 ## Releasing
 
-1. Bump `version` in `Cargo.toml` so it matches the tag you will push.
-2. Commit the version bump, then tag and push:
-
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-
-3. The [release workflow](.github/workflows/release.yml) builds a universal macOS
-   binary and static Linux binaries for x86_64 and aarch64, attaches them to the
-   GitHub Release with their checksums, and updates
-   [`fearlessfara/homebrew-tap`](https://github.com/fearlessfara/homebrew-tap).
-   The same tag is what workflows pin as `uses: fearlessfara/envie@v0.2.1`.
-
-The tap bump needs a `HOMEBREW_TAP_TOKEN` secret on this repository (a token with
-write access to `fearlessfara/homebrew-tap`). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Same steps every time: changelog, version bump, tag. The checklist, Homebrew
+secret, and the pre-release dogfood (dry-run, or apply and delete in the same
+session) are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Adopting a repository you already have
 
@@ -309,3 +296,6 @@ and `-E unit:environment` to redirect a dependency.
 - [ENVIRONMENT_OVERRIDES.md](ENVIRONMENT_OVERRIDES.md) — mixing environments with `-E`
 - [examples/](examples/) — six repository layouts, each as plain Terraform and
   again after adoption, with an `ADOPTION.md` recording exactly what changed
+- [CHANGELOG.md](CHANGELOG.md) — what shipped in each version
+- [CONTRIBUTING.md](CONTRIBUTING.md) — releasing and dogfooding
+- [LICENSE](LICENSE) — MIT

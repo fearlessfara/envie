@@ -65,6 +65,26 @@ fn every_command_the_docs_mention_exists() {
 }
 
 #[test]
+fn the_crate_version_is_in_the_changelog() {
+    let version = env!("CARGO_PKG_VERSION");
+    let changelog = std::fs::read_to_string(repository_root().join("CHANGELOG.md"))
+        .expect("CHANGELOG.md should be readable");
+    let heading = format!("## [{version}]");
+    assert!(
+        changelog.contains(&heading),
+        "CHANGELOG.md has no {heading} section; bump the changelog with Cargo.toml"
+    );
+}
+
+#[test]
+fn the_repository_has_a_license_file() {
+    assert!(
+        repository_root().join("LICENSE").exists(),
+        "LICENSE is missing; Cargo.toml claims MIT"
+    );
+}
+
+#[test]
 fn the_docs_do_not_link_to_files_that_are_gone() {
     for (path, body) in docs() {
         for link in body.split("](").skip(1) {
