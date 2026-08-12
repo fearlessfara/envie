@@ -38,21 +38,41 @@ credential chain.
 ## GitHub Actions
 
 A composite Action at the root of this repository installs the matching release
-binary and puts `envie` on `PATH`. Pin it to the same tag as the CLI:
-
-```yaml
-- uses: fearlessfara/envie@v0.2.1
-- run: envie deploy --env pr-${{ github.event.pull_request.number }} --no-prompt
-```
-
-Omit `version` to use the tag you pinned (`@v0.2.1`); set `version: latest` to
-always take the newest release. Pass `args` to run a command in the same step:
+binary and can run a command afterwards. Pin it to the same tag as the CLI.
+`--no-prompt` is passed by default so the job does not hang.
 
 ```yaml
 - uses: fearlessfara/envie@v0.2.1
   with:
-    args: delete --env pr-${{ github.event.pull_request.number }} --no-prompt
+    command: deploy
+    env: pr-${{ github.event.pull_request.number }}
 ```
+
+| Input | Default | Purpose |
+| --- | --- | --- |
+| `version` | the tag you pinned, else `latest` | Release to install (`0.2.1`, `v0.2.1`, `latest`) |
+| `command` | empty (install only) | `deploy`, `destroy`, `delete`, `list`, `show`, … |
+| `env` | empty | `--env` (required for `deploy` and `delete`). Same resolution as the CLI (below). |
+| `unit` | empty | `--unit` |
+| `dry-run` | `false` | `--dry-run` |
+| `no-prompt` | `true` | `--no-prompt` on deploy/destroy/delete/init |
+| `override` | empty | `-E unit:environment`, one per line |
+| `working-directory` | empty | Directory to run from |
+| `args` | empty | Raw arguments after `envie`; cannot mix with `command` |
+| `token` | `${{ github.token }}` | GitHub Releases / `latest` |
+
+Install only, then run the CLI yourself:
+
+```yaml
+- uses: fearlessfara/envie@v0.2.1
+- run: envie list --json
+```
+
+`env` is `--env`. A name declared under `stable` in `workspace.envie.yaml`
+deploys that long-lived environment; any other name creates an ephemeral one.
+`stable.prod` and `ephemeral.pr-42` disambiguate. That is why the pull-request
+example uses `pr-${{ github.event.pull_request.number }}` and not `prod` —
+`env: prod` is production if `prod` is declared. See [Environments](#environments).
 
 The Action does not install Terraform or configure cloud credentials. Use
 [`hashicorp/setup-terraform`](https://github.com/hashicorp/setup-terraform) and
@@ -87,7 +107,9 @@ jobs:
           role-to-assume: arn:aws:iam::123456789012:role/envie-ci
           aws-region: eu-west-1
       - uses: fearlessfara/envie@v0.2.1
-      - run: envie deploy --env pr-${{ github.event.pull_request.number }} --no-prompt
+        with:
+          command: deploy
+          env: pr-${{ github.event.pull_request.number }}
 
   destroy:
     if: github.event.action == 'closed'
@@ -103,7 +125,8 @@ jobs:
           aws-region: eu-west-1
       - uses: fearlessfara/envie@v0.2.1
         with:
-          args: delete --env pr-${{ github.event.pull_request.number }} --no-prompt
+          command: delete
+          env: pr-${{ github.event.pull_request.number }}
 ```
 
 ## Releasing
@@ -204,7 +227,12 @@ yours rather than Envie's.
 ## Environments
 
 An environment is either **stable** — declared in `workspace.envie.yaml`, meant to
-last — or **ephemeral**, created on demand from an id you choose.
+last — or **ephemeral**, created on demand from an id you choose. `--env`, `-E`,
+and the GitHub Action `env` input all use the same names:
+
+- A bare name that matches a declared stable environment deploys that environment
+  (`--env prod` is production, not a copy named prod).
+- Any other bare name is an ephemeral id (`--env pr-42` creates `pr-42`).
 
 References work anywhere an environment is named:
 

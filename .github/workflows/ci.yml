@@ -85,3 +85,10 @@ jobs:
         with:
           version: v0.2.0
           args: --version
+
+      # Structured inputs, no AWS: `show` only reads the project files.
+      - name: Run show via command
+        uses: ./
+        with:
+          command: show
+          working-directory: examples/static-site/02-envie

@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Composite GitHub Action at the repository root that installs `envie` from
-  GitHub Releases (checksum-verified) and optionally runs a command.
+  GitHub Releases (checksum-verified) and can run a command (`command`, `env`,
+  `unit`, `dry-run`, `no-prompt`, `override`). `args` remains an escape hatch.
 - MIT `LICENSE` file matching the crate metadata.
 - This changelog.
 

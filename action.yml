@@ -1,5 +1,5 @@
 name: Setup Envie
-description: Install the envie CLI from GitHub Releases and optionally run a command
+description: Install envie from GitHub Releases and optionally run a command
 author: fearlessfara
 branding:
   icon: layers
@@ -13,10 +13,44 @@ inputs:
       otherwise `latest`.
     required: false
     default: ""
+  command:
+    description: >
+      Envie subcommand to run after install (`deploy`, `destroy`, `delete`,
+      `list`, `show`, …). Leave empty to install only.
+    required: false
+    default: ""
+  env:
+    description: Environment id (`--env`). Required for `deploy` and `delete`.
+    required: false
+    default: ""
+  unit:
+    description: Limit the command to one unit (`--unit`).
+    required: false
+    default: ""
+  dry-run:
+    description: Pass `--dry-run` (plan only, no apply).
+    required: false
+    default: "false"
+  no-prompt:
+    description: >
+      Pass `--no-prompt` for `deploy`, `destroy`, `delete`, and `init`.
+      Defaults to true so Actions do not hang on stdin.
+    required: false
+    default: "true"
+  override:
+    description: >
+      Dependency redirects, one `unit:environment` per line
+      (passed as `-E`).
+    required: false
+    default: ""
+  working-directory:
+    description: Directory to run the command from (project or unit root).
+    required: false
+    default: ""
   args:
     description: >
-      If set, run `envie` with these arguments after install
-      (for example `deploy --env pr-42 --no-prompt`).
+      Escape hatch: raw arguments after `envie` (for example
+      `--version` or `list --json`). Cannot be combined with `command`.
     required: false
     default: ""
   token:
@@ -124,10 +158,78 @@ runs:
         "${bin_dir}/envie" --version
 
     - name: Run envie
-      if: inputs.args != ''
+      if: inputs.command != '' || inputs.args != ''
       shell: bash
       env:
+        ENVIE_COMMAND: ${{ inputs.command }}
+        ENVIE_ENV: ${{ inputs.env }}
+        ENVIE_UNIT: ${{ inputs.unit }}
+        ENVIE_DRY_RUN: ${{ inputs.dry-run }}
+        ENVIE_NO_PROMPT: ${{ inputs.no-prompt }}
+        ENVIE_OVERRIDE: ${{ inputs.override }}
+        ENVIE_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         ENVIE_ARGS: ${{ inputs.args }}
       run: |
         set -euo pipefail
-        eval "envie ${ENVIE_ARGS}"
+
+        if [ -n "${ENVIE_COMMAND}" ] && [ -n "${ENVIE_ARGS}" ]; then
+          echo "::error::Set either 'command' or 'args', not both"
+          exit 1
+        fi
+
+        if [ -n "${ENVIE_WORKING_DIRECTORY}" ]; then
+          cd "${ENVIE_WORKING_DIRECTORY}"
+        fi
+
+        if [ -n "${ENVIE_ARGS}" ]; then
+          eval "envie ${ENVIE_ARGS}"
+          exit 0
+        fi
+
+        case "${ENVIE_COMMAND}" in
+          adopt|init|deploy|destroy|delete|generate|list|output|clean|show) ;;
+          *)
+            echo "::error::Unknown command '${ENVIE_COMMAND}'"
+            exit 1
+            ;;
+        esac
+
+        case "${ENVIE_COMMAND}" in
+          deploy|delete)
+            if [ -z "${ENVIE_ENV}" ]; then
+              echo "::error::'env' is required for ${ENVIE_COMMAND}"
+              exit 1
+            fi
+            ;;
+        esac
+
+        set -- "${ENVIE_COMMAND}"
+        if [ -n "${ENVIE_ENV}" ]; then
+          set -- "$@" --env "${ENVIE_ENV}"
+        fi
+        if [ -n "${ENVIE_UNIT}" ]; then
+          set -- "$@" --unit "${ENVIE_UNIT}"
+        fi
+        if [ "${ENVIE_DRY_RUN}" = "true" ]; then
+          set -- "$@" --dry-run
+        fi
+        case "${ENVIE_COMMAND}" in
+          deploy|destroy|delete|init)
+            if [ "${ENVIE_NO_PROMPT}" != "false" ]; then
+              set -- "$@" --no-prompt
+            fi
+            ;;
+        esac
+        if [ -n "${ENVIE_OVERRIDE}" ]; then
+          while IFS= read -r line || [ -n "${line}" ]; do
+            # trim leading/trailing whitespace
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -z "${line}" ] && continue
+            set -- "$@" -E "${line}"
+          done <<EOF
+        ${ENVIE_OVERRIDE}
+        EOF
+        fi
+
+        envie "$@"
